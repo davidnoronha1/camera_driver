@@ -217,6 +217,9 @@ public:
     declare_parameter("camera_frame_id", "camera");
     declare_parameter("usb_port", "");
     declare_parameter("camera_info_url", "");
+    // Fractional crop region: "x1,y1,x2,y2" where each value is in [0,1].
+    // e.g. "0.0,0.0,0.5,1.0" selects the left half of the frame.
+    declare_parameter("crop", "");
 
     std::string usb_port = get_parameter("usb_port").as_string();
     std::string device_path = get_parameter("device_path").as_string();
@@ -230,6 +233,7 @@ public:
     long port = get_parameter("port").as_int();
     long bitrate = get_parameter("bitrate").as_int();
     std::string camera_info_url = get_parameter("camera_info_url").as_string();
+    std::string crop_param = get_parameter("crop").as_string();
 
     frame_id_ = get_parameter("camera_frame_id").as_string();
     ros_topic_basename_ = get_parameter("ros_topic").as_string();
@@ -394,7 +398,7 @@ public:
 
     // ── Build the shared pipeline string ────────────────────────────────────
     std::string pipeline_str = build_pipeline(fmt, device_path, width, height,
-                                              framerate, bitrate);
+                                              framerate, bitrate, crop_param);
     RCLCPP_INFO(get_logger(), "GStreamer pipeline: %s", pipeline_str.c_str());
     RCLCPP_INFO(get_logger(),
                 "============================================================");
@@ -447,18 +451,54 @@ public:
   ~RTSPCameraStreamer() { cleanup(); }
 
 private:
+  // ── Crop helper ───────────────────────────────────────────────────────────
+  // Parses "x1,y1,x2,y2" (normalised [0,1]) and returns a videocrop element
+  // string, e.g. "videocrop left=0 right=640 top=0 bottom=0 ! ".
+  // Returns empty string when crop_param is empty or invalid.
+  std::string build_videocrop(const std::string &crop_param,
+                              long width, long height) {
+    if (crop_param.empty())
+      return "";
+
+    double x1 = 0, y1 = 0, x2 = 1, y2 = 1;
+    if (sscanf(crop_param.c_str(), "%lf,%lf,%lf,%lf", &x1, &y1, &x2, &y2) != 4) {
+      RCLCPP_WARN(get_logger(),
+                  "crop parameter '%s' is not in 'x1,y1,x2,y2' format — ignored",
+                  crop_param.c_str());
+      return "";
+    }
+
+    int left   = static_cast<int>(x1 * width);
+    int top    = static_cast<int>(y1 * height);
+    int right  = static_cast<int>((1.0 - x2) * width);
+    int bottom = static_cast<int>((1.0 - y2) * height);
+
+    RCLCPP_INFO(get_logger(),
+                "Crop: left=%d right=%d top=%d bottom=%d  (%ldx%ld → %ldx%ld)",
+                left, right, top, bottom,
+                width, height,
+                width - left - right, height - top - bottom);
+
+    return "videocrop left=" + std::to_string(left) +
+           " right=" + std::to_string(right) +
+           " top=" + std::to_string(top) +
+           " bottom=" + std::to_string(bottom) + " ! ";
+  }
+
   // ── Pipeline builder ─────────────────────────────────────────────────────
   std::string build_pipeline(const std::string &fmt,
                              const std::string &device_path,
                              long width, long height,
-                             long framerate, long bitrate) {
+                             long framerate, long bitrate,
+                             const std::string &crop_param = "") {
     std::string gst_fmt = gst_caps_for_format(fmt);
+    std::string videocrop = build_videocrop(crop_param, width, height);
     std::ostringstream ss;
 
     if (strcasecmp(fmt.c_str(), "H264") == 0) {
       // ── H.264 passthrough: camera already encodes, skip re-encode ─────────
       // RTSP branch gets the raw H.264 bitstream directly.
-      // ROS2 branch decodes to RGB for image messages.
+      // ROS2 branch decodes to RGB (and crops, if requested) for image messages.
       RCLCPP_INFO(get_logger(),
                   "Pipeline mode: H.264 passthrough (no re-encode)");
       ss << "( "
@@ -468,13 +508,14 @@ private:
          << "h264parse ! "
          << "tee name=t "
 
-         // Branch 1 – RTSP: pay the H.264 directly
+         // Branch 1 – RTSP: pay the H.264 directly (uncropped)
          << "t. ! queue leaky=downstream max-size-buffers=2 ! "
          << "rtph264pay name=pay0 pt=96 config-interval=1 "
 
-         // Branch 2 – ROS2: decode → RGB appsink
+         // Branch 2 – ROS2: decode → [crop] → RGB appsink
          << "t. ! queue leaky=downstream max-size-buffers=2 ! "
          << "avdec_h264 ! "
+         << videocrop
          << "videoconvert ! video/x-raw,format=RGB ! "
          << "appsink name=ros_sink max-buffers=2 drop=true sync=false "
          << ")";
@@ -497,7 +538,9 @@ private:
       if (strcasecmp(fmt.c_str(), "MJPEG") == 0)
         ss << "jpegdec ! ";
 
+      // Apply crop (if any) before the tee so both branches see cropped frames
       ss << "videoconvert ! "
+         << videocrop
          << "tee name=t "
 
          // Branch 1 – RTSP/H.264
