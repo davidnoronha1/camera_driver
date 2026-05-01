@@ -11,6 +11,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(PkgConfig REQUIRED)
 find_package(camera_info_manager REQUIRED)
+find_package(OpenCV REQUIRED)
 find_package(image_transport REQUIRED)
 
 # Find system libraries
@@ -19,9 +20,11 @@ pkg_check_modules(GST REQUIRED gstreamer-1.0 gstreamer-app-1.0 gstreamer-rtsp-1.
 add_executable(camera_driver_exe src/camera_driver_node.cpp)
 target_include_directories(camera_driver_exe PRIVATE
   ${GST_INCLUDE_DIRS}
+  ${OpenCV_INCLUDE_DIRS}
 )
 target_link_libraries(camera_driver_exe
   ${GST_LIBRARIES}
+  ${OpenCV_LIBRARIES}
 )
 ament_target_dependencies(camera_driver_exe
   rclcpp
