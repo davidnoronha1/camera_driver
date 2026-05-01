@@ -35,6 +35,9 @@ ament_target_dependencies(camera_driver_exe
 install(TARGETS camera_driver_exe
   DESTINATION lib/${PROJECT_NAME})
 
+install(DIRECTORY launch resource
+  DESTINATION share/${PROJECT_NAME})
+
 if(BUILD_TESTING)
   add_subdirectory(test)
 endif()

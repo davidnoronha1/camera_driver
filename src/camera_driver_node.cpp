@@ -220,6 +220,8 @@ public:
     // Fractional crop region: "x1,y1,x2,y2" where each value is in [0,1].
     // e.g. "0.0,0.0,0.5,1.0" selects the left half of the frame.
     declare_parameter("crop", "");
+    // Path to an MP4/video file to use as source instead of a camera device.
+    declare_parameter("video_file", "");
 
     std::string usb_port = get_parameter("usb_port").as_string();
     std::string device_path = get_parameter("device_path").as_string();
@@ -234,6 +236,7 @@ public:
     long bitrate = get_parameter("bitrate").as_int();
     std::string camera_info_url = get_parameter("camera_info_url").as_string();
     std::string crop_param = get_parameter("crop").as_string();
+    std::string video_file = get_parameter("video_file").as_string();
 
     frame_id_ = get_parameter("camera_frame_id").as_string();
     ros_topic_basename_ = get_parameter("ros_topic").as_string();
@@ -243,6 +246,7 @@ public:
 
     constexpr const char *mount_point = "/image_rtsp";
 
+    if (video_file.empty()) {
     if (vendor != -1)
       RCLCPP_INFO(get_logger(), "Vendor ID:  0x%04lx", vendor);
     if (product != -1)
@@ -339,6 +343,7 @@ public:
     }
 
     gst_object_unref(target_device);
+    } // end if (video_file.empty()) — device discovery block
     auto *const machine_ip = get_machine_ip();
 
     // ── CameraInfoManager ────────────────────────────────────────────────────
@@ -368,7 +373,10 @@ public:
     RCLCPP_INFO(get_logger(), "RTSP Stream Configuration:");
     RCLCPP_INFO(get_logger(),
                 "============================================================");
-    RCLCPP_INFO(get_logger(), "Device path:        %s", device_path.c_str());
+    if (video_file.empty())
+      RCLCPP_INFO(get_logger(), "Device path:        %s", device_path.c_str());
+    else
+      RCLCPP_INFO(get_logger(), "Video file:         %s", video_file.c_str());
     RCLCPP_INFO(get_logger(), "Image Width:        %ld px", width);
     RCLCPP_INFO(get_logger(), "Image Height:       %ld px", height);
     RCLCPP_INFO(get_logger(), "Frame Format:       %s", fmt.c_str());
@@ -397,8 +405,9 @@ public:
         ros_topic_basename_ + "/camera_info", rclcpp::SensorDataQoS());
 
     // ── Build the shared pipeline string ────────────────────────────────────
-    std::string pipeline_str = build_pipeline(fmt, device_path, width, height,
-                                              framerate, bitrate, crop_param);
+    std::string pipeline_str = video_file.empty()
+        ? build_pipeline(fmt, device_path, width, height, framerate, bitrate, crop_param)
+        : build_pipeline_from_file(video_file, bitrate, framerate, crop_param, width, height);
     RCLCPP_INFO(get_logger(), "GStreamer pipeline: %s", pipeline_str.c_str());
     RCLCPP_INFO(get_logger(),
                 "============================================================");
@@ -555,6 +564,42 @@ private:
          << "appsink name=ros_sink max-buffers=2 drop=true sync=false "
          << ")";
     }
+
+    return ss.str();
+  }
+
+  // ── File source pipeline ──────────────────────────────────────────────────
+  // Reads from an MP4 (or any GStreamer-supported container) instead of a
+  // camera. decodebin auto-selects the video stream; audio pads are ignored
+  // because videoconvert only accepts video caps.
+  std::string build_pipeline_from_file(const std::string &file_path,
+                                       long bitrate, long framerate,
+                                       const std::string &crop_param,
+                                       long width, long height) {
+    auto best_enc = detect_best_encoder(bitrate, framerate);
+    std::string videocrop = build_videocrop(crop_param, width, height);
+    std::ostringstream ss;
+
+    RCLCPP_INFO(get_logger(), "Pipeline mode: file source (%s)", file_path.c_str());
+
+    ss << "( "
+       << "filesrc location=" << file_path << " ! "
+       << "decodebin ! "
+       << "videoconvert ! "
+       << videocrop
+       << "tee name=t "
+
+       // Branch 1 – RTSP/H.264
+       << "t. ! queue leaky=downstream max-size-buffers=2 ! "
+       << "videoconvert ! " << caps_for_encoder(best_enc.type) << " ! "
+       << best_enc.name << " " << best_enc.extra_props << " ! "
+       << "rtph264pay name=pay0 pt=96 config-interval=1 "
+
+       // Branch 2 – ROS2 appsink (RGB)
+       << "t. ! queue leaky=downstream max-size-buffers=2 ! "
+       << "videoconvert ! video/x-raw,format=RGB ! "
+       << "appsink name=ros_sink max-buffers=2 drop=true sync=false "
+       << ")";
 
     return ss.str();
   }
