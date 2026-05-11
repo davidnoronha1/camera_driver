@@ -12,9 +12,13 @@
   <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
+  <depend>image_transport</depend>
+  <depend>camera_info_manager</depend>
   <depend>libudev-dev</depend>
   <depend>libgstreamer1.0-dev</depend>
   <depend>libgstreamer-plugins-base1.0-dev</depend>
+  <depend>libgstrtspserver-1.0-dev</depend>
+  <depend>libgstreamer-plugins-bad1.0-dev</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
