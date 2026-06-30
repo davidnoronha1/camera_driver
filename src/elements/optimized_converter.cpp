@@ -19,10 +19,17 @@ std::string OptimizedConverter::resizeStr(const OptimizedVideoResize &r) {
 
 OptimizedConverter::OptimizedConverter(
     std::vector<PixelFormat> desired_outputs,
-    std::optional<OptimizedVideoResize> resize, int quality, int bitrate_kbps)
+    std::optional<OptimizedVideoResize> resize, int quality, int bitrate_kbps,
+    std::vector<std::string> encoder_preferences)
     : UnresolvedSegment("opt_conv_" + std::to_string(g_conv_id++), {}),
       desired_outputs_(std::move(desired_outputs)), resize_(resize),
-      quality_(quality), bitrate_kbps_(bitrate_kbps) {
+      quality_(quality), bitrate_kbps_(bitrate_kbps),
+      encoder_preferences_(std::move(encoder_preferences)) {
+  if (encoder_preferences_.empty()) {
+    encoder_preferences_ = {"nvv4l2h264enc", "nvh264enc", "qsvh264enc",
+                            "v4l2h264enc", "x264enc"};
+  }
+
   auto *self = this;
   auto resolver = [self](const PipelineContext &ctx) -> ResolvedSegment {
     if (self->desired_outputs_.empty())
@@ -54,7 +61,8 @@ OptimizedConverter::OptimizedConverter(
     switch (target) {
     case PixelFormat::H264:
     case PixelFormat::H264_NVMM:
-      seg = buildH264Path(input, ctx, self->bitrate_kbps_, self->resize_);
+      seg = buildH264Path(input, ctx, self->bitrate_kbps_, self->resize_,
+                          self->encoder_preferences_);
       seg.name = self->name_;
       break;
     case PixelFormat::MJPEG:
@@ -73,12 +81,13 @@ OptimizedConverter::OptimizedConverter(
   };
 
   *static_cast<UnresolvedSegment *>(this) =
-      UnresolvedSegment(name_, std::move(resolver));
+      UnresolvedSegment(name_, std::move(resolver), preferredInputFormats());
 }
 
 ResolvedSegment OptimizedConverter::buildH264Path(
     PixelFormat input, const PipelineContext &ctx, int bitrate_kbps,
-    const std::optional<OptimizedVideoResize> &resize) {
+    const std::optional<OptimizedVideoResize> &resize,
+    const std::vector<std::string> &encoder_prefs) {
   ResolvedSegment seg;
   seg.output_caps.format = PixelFormat::H264;
 
@@ -90,7 +99,37 @@ ResolvedSegment OptimizedConverter::buildH264Path(
 
   auto resize_s = resize ? resizeStr(*resize) : std::string{};
 
-  if (ctx.hw.has_nvv4l2h264enc && ctx.hw.has_nvvidconv) {
+  std::string chosen_enc = "";
+  for (const auto &enc : encoder_prefs) {
+    if (enc == "nvv4l2h264enc" && ctx.hw.has_nvvidconv &&
+        ctx.hw.has_nvv4l2h264enc) {
+      chosen_enc = enc;
+      break;
+    }
+    if (enc == "nvh264enc" && ctx.hw.has_nvh264enc) {
+      chosen_enc = enc;
+      break;
+    }
+    if (enc == "qsvh264enc" && ctx.hw.has_qsvh264enc) {
+      chosen_enc = enc;
+      break;
+    }
+    if (enc == "v4l2h264enc" && ctx.hw.has_v4l2h264enc) {
+      chosen_enc = enc;
+      break;
+    }
+    if (enc == "x264enc" && ctx.hw.has_x264enc) {
+      chosen_enc = enc;
+      break;
+    }
+  }
+
+  if (chosen_enc.empty()) {
+    throw std::runtime_error("OptimizedConverter: no H264 encoder available "
+                             "(install gstreamer1.0-plugins-ugly for x264enc)");
+  }
+
+  if (chosen_enc == "nvv4l2h264enc") {
     // NVMM path: colorspace converter → nvv4l2h264enc
     const std::string &nvc = ctx.hw.nvvidconv_name;
     std::string conv_step;
@@ -116,7 +155,7 @@ ResolvedSegment OptimizedConverter::buildH264Path(
     }
     seg.gst_string = conv_step + "nvv4l2h264enc" + bitrateStr("bitrate");
 
-  } else if (ctx.hw.has_nvh264enc) {
+  } else if (chosen_enc == "nvh264enc") {
     // Desktop NVIDIA: videoconvert → NV12 → nvh264enc
     std::string conv_step;
     switch (input) {
@@ -139,7 +178,7 @@ ResolvedSegment OptimizedConverter::buildH264Path(
     }
     seg.gst_string = conv_step + "nvh264enc" + bitrateStr("bitrate");
 
-  } else if (ctx.hw.has_qsvh264enc) {
+  } else if (chosen_enc == "qsvh264enc") {
     std::string conv_step = (input == PixelFormat::MJPEG) ? "jpegdec ! " : "";
     conv_step += "videoconvert ! video/x-raw,format=I420";
     if (!resize_s.empty())
@@ -148,7 +187,7 @@ ResolvedSegment OptimizedConverter::buildH264Path(
     conv_step += " ! ";
     seg.gst_string = conv_step + "qsvh264enc" + bitrateStr("bitrate");
 
-  } else if (ctx.hw.has_v4l2h264enc) {
+  } else if (chosen_enc == "v4l2h264enc") {
     std::string conv_step = (input == PixelFormat::MJPEG) ? "jpegdec ! " : "";
     conv_step += "videoconvert ! video/x-raw,format=I420";
     if (!resize_s.empty())
@@ -157,7 +196,7 @@ ResolvedSegment OptimizedConverter::buildH264Path(
     conv_step += " ! ";
     seg.gst_string = conv_step + "v4l2h264enc ! video/x-h264,level=(string)4";
 
-  } else if (ctx.hw.has_x264enc) {
+  } else if (chosen_enc == "x264enc") {
     std::string conv_step = (input == PixelFormat::MJPEG) ? "jpegdec ! " : "";
     conv_step += "videoconvert ! video/x-raw,format=I420";
     if (!resize_s.empty())
@@ -168,10 +207,6 @@ ResolvedSegment OptimizedConverter::buildH264Path(
     if (bitrate_kbps > 0)
       enc += fmt::format(" bitrate={}", bitrate_kbps);
     seg.gst_string = conv_step + enc;
-
-  } else {
-    throw std::runtime_error("OptimizedConverter: no H264 encoder available "
-                             "(install gstreamer1.0-plugins-ugly for x264enc)");
   }
 
   return seg;
@@ -230,10 +265,34 @@ std::vector<PixelFormat> OptimizedConverter::preferredInputFormats() const {
   const hw::HWCaps &hw = hw::probe();
 
   if (target == PixelFormat::H264 || target == PixelFormat::H264_NVMM) {
-    if (hw.has_nvvidconv && hw.has_nvv4l2h264enc)
+    std::string chosen_enc = "";
+    for (const auto &enc : encoder_preferences_) {
+      if (enc == "nvv4l2h264enc" && hw.has_nvvidconv && hw.has_nvv4l2h264enc) {
+        chosen_enc = enc;
+        break;
+      }
+      if (enc == "nvh264enc" && hw.has_nvh264enc) {
+        chosen_enc = enc;
+        break;
+      }
+      if (enc == "qsvh264enc" && hw.has_qsvh264enc) {
+        chosen_enc = enc;
+        break;
+      }
+      if (enc == "v4l2h264enc" && hw.has_v4l2h264enc) {
+        chosen_enc = enc;
+        break;
+      }
+      if (enc == "x264enc" && hw.has_x264enc) {
+        chosen_enc = enc;
+        break;
+      }
+    }
+
+    if (chosen_enc == "nvv4l2h264enc")
       return {PixelFormat::NV12_NVMM, PixelFormat::NV12, PixelFormat::YUYV,
               PixelFormat::MJPEG};
-    if (hw.has_nvh264enc)
+    if (chosen_enc == "nvh264enc")
       return {PixelFormat::NV12, PixelFormat::YUYV, PixelFormat::MJPEG};
     return {PixelFormat::YUYV, PixelFormat::I420, PixelFormat::MJPEG};
   }
@@ -262,7 +321,14 @@ REGISTER_PIPELINE_ELEMENT(OptimizedConverter, [](const YAML::Node &cfg) {
     resize = camera_driver::OptimizedVideoResize{
         cfg["resize"]["width"].as<int>(0), cfg["resize"]["height"].as<int>(0)};
 
+  std::vector<std::string> encoders;
+  if (cfg["encoders"] && cfg["encoders"].IsSequence()) {
+    for (auto &e : cfg["encoders"]) {
+      encoders.push_back(e.as<std::string>());
+    }
+  }
+
   return std::make_shared<camera_driver::OptimizedConverter>(
       outputs, resize, cfg["quality"].as<int>(85),
-      cfg["bitrate_kbps"].as<int>(0));
+      cfg["bitrate_kbps"].as<int>(0), encoders);
 });

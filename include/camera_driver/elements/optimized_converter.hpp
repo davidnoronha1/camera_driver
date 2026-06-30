@@ -20,7 +20,8 @@ public:
     OptimizedConverter(std::vector<PixelFormat> desired_outputs,
                        std::optional<OptimizedVideoResize> resize = std::nullopt,
                        int quality = 85,
-                       int bitrate_kbps = 0);
+                       int bitrate_kbps = 0,
+                       std::vector<std::string> encoder_preferences = {});
 
     std::vector<PixelFormat> preferredInputFormats() const override;
 
@@ -29,9 +30,11 @@ private:
     std::optional<OptimizedVideoResize> resize_;
     int quality_;
     int bitrate_kbps_;
+    std::vector<std::string> encoder_preferences_;
 
     static ResolvedSegment buildH264Path(PixelFormat input, const PipelineContext& ctx,
-                                         int bitrate_kbps, const std::optional<OptimizedVideoResize>& resize);
+                                         int bitrate_kbps, const std::optional<OptimizedVideoResize>& resize,
+                                         const std::vector<std::string>& encoder_prefs);
     static ResolvedSegment buildMJPEGPath(PixelFormat input, const PipelineContext& ctx,
                                           int quality, const std::optional<OptimizedVideoResize>& resize);
     static std::string resizeStr(const OptimizedVideoResize& r);

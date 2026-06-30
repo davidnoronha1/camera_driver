@@ -36,6 +36,11 @@ std::unique_ptr<Pipeline> YAMLPipeline::fromFile(const std::string& path) {
         std::string mnt  = root["pipeline"]["mount_point"].as<std::string>("/stream");
         pipeline = std::make_unique<RTSPPipeline>(port, mnt);
     } else
+#else
+    if (type == "RTSPPipeline") {
+        throw std::runtime_error("RTSPPipeline was requested, but RTSP support was not compiled. "
+                                 "Please install libgstrtspserver-1.0-dev and rebuild the project.");
+    } else
 #endif
     {
         pipeline = std::make_unique<Pipeline>();

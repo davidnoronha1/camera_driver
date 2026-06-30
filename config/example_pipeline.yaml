@@ -29,6 +29,7 @@ elements:
   - type: OptimizedConverter
     outputs: [H264]
     bitrate_kbps: 4000
+    encoders: [qsvh264enc, v4l2h264enc, x264enc]
     # Optional: resize in the same hardware step (no extra copy)
     # resize:
     #   width: 1280
