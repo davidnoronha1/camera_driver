@@ -1,0 +1,8 @@
+/home/david/PERSONAL/camera_driver/build/CMakeFiles/camera_driver_core.dir
+/home/david/PERSONAL/camera_driver/build/CMakeFiles/camera_driver_exe.dir
+/home/david/PERSONAL/camera_driver/build/CMakeFiles/edit_cache.dir
+/home/david/PERSONAL/camera_driver/build/CMakeFiles/rebuild_cache.dir
+/home/david/PERSONAL/camera_driver/build/CMakeFiles/list_install_components.dir
+/home/david/PERSONAL/camera_driver/build/CMakeFiles/install.dir
+/home/david/PERSONAL/camera_driver/build/CMakeFiles/install/local.dir
+/home/david/PERSONAL/camera_driver/build/CMakeFiles/install/strip.dir
