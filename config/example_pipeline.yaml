@@ -44,6 +44,14 @@ elements:
   #         quality: 85
   #     - - type: NVUnixFDPublisher
   #         socket: /tmp/camera_nv.sock
+  #     - - type: MkvRecorderElement
+  #         location: /tmp/camera_driver_out.mkv
+  #         # ROS camera_info-style calibration YAML (camera_matrix/distortion_model/...).
+  #         calibration_file: config/example_calibration.yaml
+  #         # Alternatively, a full CameraMetadata YAML (calibration + pose,
+  #         # the same schema CameraMetadata::toYaml() writes) — takes
+  #         # precedence over calibration_file if both are given.
+  #         # metadata_file: config/example_metadata.yaml
 
 ---
 # Alternative: MJPEG-only pipeline (no RTSP, runs as plain Pipeline)
@@ -65,3 +73,27 @@ elements:
 #
 #   - type: MJPEGPublisher
 #     port: 8080
+
+---
+# Alternative: play back a recording made by MkvRecorderElement, undistorting
+# it automatically using the calibration embedded in the file — no manual
+# passing of calibration required. MkvPlaybackElement reads the file's
+# camera-metadata and publishes it to the pipeline's scratchpad;
+# UndistortElement picks it up from there on its own. If the file has no
+# calibration (or nvdewarper isn't installed), UndistortElement is a
+# no-op passthrough instead of an error.
+#
+# Note: MkvPlaybackElement must come before UndistortElement in the elements
+# list — the scratchpad publish happens while the pipeline is being resolved,
+# in element order.
+#
+# pipeline:
+#   type: Pipeline
+#
+# elements:
+#   - type: MkvPlaybackElement
+#     location: /tmp/camera_driver_out.mkv
+#
+#   - type: UndistortElement
+#
+#   - type: DisplayPublisher

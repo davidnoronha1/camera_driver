@@ -14,8 +14,8 @@
 namespace camera_driver {
 
 // HTTP multipart MJPEG streaming server. Wraps a GStreamer appsink.
-// If input is MJPEG: publishes directly (zero encode overhead).
-// If input is RGB/BGR: encodes to JPEG using OpenCV before publishing.
+// Requires MJPEG input; upstream elements (e.g. OptimizedConverter) must
+// encode to JPEG (jpegenc/nvjpegenc) before this publisher.
 class MJPEGPublisher : public PipelineElement {
 public:
     explicit MJPEGPublisher(int port = 8080, int jpeg_quality = 85);

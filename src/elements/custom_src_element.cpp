@@ -3,9 +3,9 @@
 #include "camera_driver/lflogger.hpp"
 #include "camera_driver/pipeline/pipeline.hpp"
 #include <atomic>
+#include <cstring>
 #include <fmt/format.h>
 #include <gst/app/gstappsrc.h>
-#include <opencv2/imgproc.hpp>
 #include <stdexcept>
 
 namespace camera_driver {
@@ -47,23 +47,6 @@ void CustomSrcElement::bringdown(Pipeline* /*parent*/) {
         gst_object_unref(appsrc_);
         appsrc_ = nullptr;
     }
-}
-
-bool CustomSrcElement::write(const cv::Mat& frame) {
-    if (!appsrc_ || !running_) return false;
-
-    // Convert to the declared format if needed
-    cv::Mat converted;
-    if (format_ == PixelFormat::RGB && frame.channels() == 3 &&
-        frame.type() == CV_8UC3) {
-        // OpenCV stores as BGR by default
-        cv::cvtColor(frame, converted, cv::COLOR_BGR2RGB);
-    } else {
-        converted = frame;
-    }
-
-    size_t size = static_cast<size_t>(converted.total() * converted.elemSize());
-    return write(converted.data, size);
 }
 
 bool CustomSrcElement::write(const uint8_t* data, size_t size_bytes) {

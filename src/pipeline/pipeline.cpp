@@ -19,10 +19,20 @@ Pipeline::~Pipeline() {
         g_main_loop_unref(glib_loop_);
         glib_loop_ = nullptr;
     }
+    if (glib_context_) {
+        g_main_context_unref(glib_context_);
+        glib_context_ = nullptr;
+    }
 }
 
 void Pipeline::add(std::shared_ptr<PipelineElement> element) {
     elements_.push_back(std::move(element));
+}
+
+void Pipeline::startScratchpadServer(const std::string& socket_path) {
+    if (scratchpad_server_) return;
+    scratchpad_server_ = std::make_unique<ScratchpadServer>(scratchpad_, socket_path);
+    scratchpad_server_->start();
 }
 
 GstElement* Pipeline::getGstElement(const std::string& name) const {
@@ -59,20 +69,67 @@ void Pipeline::build() {
 }
 
 void Pipeline::run() {
-    if (!gst_pipeline_) throw std::runtime_error("Pipeline::run() called before build()");
+    start();
+
+    glib_loop_ = g_main_loop_new(glib_context_, FALSE);
+    g_main_loop_run(glib_loop_);
+
+    teardown();
+}
+
+void Pipeline::start() {
+    if (!gst_pipeline_) throw std::runtime_error("Pipeline::start() called before build()");
+    if (running_) return;
+
+    // Own context, not the process-global default — see the glib_context_
+    // comment in the header for why. Push it as this thread's default so
+    // gst_bus_add_watch() (which attaches to the *calling thread's* default
+    // context) picks it up instead of the global one.
+    if (!glib_context_) glib_context_ = g_main_context_new();
+    g_main_context_push_thread_default(glib_context_);
 
     GstBus* bus = gst_element_get_bus(gst_pipeline_);
     gst_bus_add_watch(bus, onBusMessage, this);
     gst_object_unref(bus);
+
+    g_main_context_pop_thread_default(glib_context_);
 
     GstStateChangeReturn ret = gst_element_set_state(gst_pipeline_, GST_STATE_PLAYING);
     if (ret == GST_STATE_CHANGE_FAILURE)
         throw std::runtime_error("Failed to set pipeline to PLAYING");
 
     LockFreeLogger::getInstance().info("pipeline", "Pipeline running");
+    running_ = true;
+}
 
-    glib_loop_ = g_main_loop_new(nullptr, FALSE);
-    g_main_loop_run(glib_loop_);
+bool Pipeline::tick() {
+    if (!gst_pipeline_) throw std::runtime_error("Pipeline::tick() called before start()");
+    if (!running_) {
+        teardown();
+        return false;
+    }
+
+    // Same private context start() attached the bus watch to, so this
+    // drains bus messages (and anything else scheduled there) exactly like
+    // run()'s blocking loop would, one pass at a time.
+    while (g_main_context_iteration(glib_context_, FALSE)) {}
+
+    if (!running_) {
+        teardown();
+        return false;
+    }
+    return true;
+}
+
+void Pipeline::stop() {
+    running_ = false;
+    if (glib_loop_ && g_main_loop_is_running(glib_loop_))
+        g_main_loop_quit(glib_loop_);
+}
+
+void Pipeline::teardown() {
+    if (torn_down_) return;
+    torn_down_ = true;
 
     gst_element_set_state(gst_pipeline_, GST_STATE_NULL);
 
@@ -80,11 +137,6 @@ void Pipeline::run() {
         (*it)->bringdown(this);
 
     LockFreeLogger::getInstance().info("pipeline", "Pipeline stopped");
-}
-
-void Pipeline::stop() {
-    if (glib_loop_ && g_main_loop_is_running(glib_loop_))
-        g_main_loop_quit(glib_loop_);
 }
 
 // ─── Resolution ──────────────────────────────────────────────────────────────

@@ -1,5 +1,6 @@
 #include "camera_driver/publishers/display_publisher.hpp"
 #include "camera_driver/element_registry.hpp"
+#include "camera_driver/hw_detect.hpp"
 #include "camera_driver/lflogger.hpp"
 #include <atomic>
 #include <fmt/format.h>
@@ -35,8 +36,22 @@ DisplayPublisher::DisplayPublisher(std::string window_name)
             decode_prefix = "jpegdec ! ";
         }
 
-        // Use autovideoconvert and fpsdisplaysink
-        seg.gst_string = fmt::format("{}autovideoconvert ! fpsdisplaysink text-overlay=true sync=false", decode_prefix);
+        // Prefer nveglglessink over autovideosink's default ranking (which
+        // picks kmssink) only when it's actually available. kmssink does
+        // direct DRM mode-setting, which requires being DRM master for the
+        // GPU — but the host's X server already holds DRM master while it's
+        // driving the desktop, so kmssink's drmModeSetPlane is always refused
+        // (EPERM) whenever a real X session is running on the same card.
+        // nveglglessink instead presents through the X server via EGL/GLX
+        // (like any normal GL application window), so it only needs render-node
+        // access, not DRM master. Where nveglglessink isn't present (non-NVIDIA
+        // hardware), fall back to plain autovideosink.
+        // text-overlay is off because this image's GStreamer wasn't built with
+        // pango (textoverlay unavailable).
+        std::string video_sink = hw::gstHasElement("nveglglessink") ? " video-sink=nveglglessink" : "";
+        seg.gst_string = fmt::format(
+            "{}autovideoconvert ! fpsdisplaysink{} text-overlay=false sync=false",
+            decode_prefix, video_sink);
 
         return seg;
     };

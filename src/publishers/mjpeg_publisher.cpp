@@ -8,8 +8,6 @@
 #include <gst/app/gstappsink.h>
 #include <gst/video/video.h>
 #include <netinet/tcp.h>
-#include <opencv2/imgcodecs.hpp>
-#include <opencv2/imgproc.hpp>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -36,7 +34,7 @@ MJPEGPublisher::~MJPEGPublisher() {
 }
 
 std::vector<PixelFormat> MJPEGPublisher::preferredInputFormats() const {
-    return { PixelFormat::MJPEG, PixelFormat::RGB, PixelFormat::BGR };
+    return { PixelFormat::MJPEG };
 }
 
 void MJPEGPublisher::setup(Pipeline* parent) {
@@ -106,22 +104,11 @@ GstFlowReturn MJPEGPublisher::onNewSample(GstAppSink* sink, gpointer data) {
         if (is_jpeg) {
             self->pushJpegFrame(map.data, map.size);
         } else {
-            // Raw frame — encode to JPEG via OpenCV
-            GstVideoInfo vinfo;
-            if (caps && gst_video_info_from_caps(&vinfo, caps)) {
-                int cv_type = (GST_VIDEO_INFO_FORMAT(&vinfo) == GST_VIDEO_FORMAT_RGB) ? CV_8UC3 : CV_8UC3;
-                cv::Mat raw(vinfo.height, vinfo.width, cv_type, map.data);
-                cv::Mat bgr;
-                if (GST_VIDEO_INFO_FORMAT(&vinfo) == GST_VIDEO_FORMAT_RGB)
-                    cv::cvtColor(raw, bgr, cv::COLOR_RGB2BGR);
-                else
-                    bgr = raw;
-
-                std::vector<uint8_t> jpeg;
-                std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, self->jpeg_quality_};
-                cv::imencode(".jpg", bgr, jpeg, params);
-                self->pushJpegFrame(jpeg.data(), jpeg.size());
-            }
+            // MJPEGPublisher only accepts MJPEG input (see preferredInputFormats());
+            // an upstream JPEG encoder must run before this element.
+            LockFreeLogger::getInstance().error("mjpeg_pub",
+                fmt::format("{} received non-JPEG buffer; dropping frame "
+                            "(check pipeline negotiated an encoder upstream)", self->name_));
         }
         gst_buffer_unmap(buf, &map);
     }

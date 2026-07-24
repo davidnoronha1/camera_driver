@@ -6,7 +6,6 @@
 #include <fmt/format.h>
 #include <gst/app/gstappsink.h>
 #include <gst/video/video.h>
-#include <opencv2/imgproc.hpp>
 #include <stdexcept>
 
 namespace camera_driver {
@@ -24,6 +23,8 @@ CustomPublisher::CustomPublisher(size_t max_queue)
         name_, max_queue_);
 }
 
+void CustomPublisher::setCallback(RawCallback cb) { raw_callback_ = std::move(cb); }
+
 void CustomPublisher::setup(Pipeline* parent) {
     GstElement* el = parent->getGstElement(name_);
     if (!el) throw std::runtime_error("CustomPublisher: appsink '" + name_ + "' not found");
@@ -34,7 +35,8 @@ void CustomPublisher::setup(Pipeline* parent) {
     cbs.eos        = onEos;
     gst_app_sink_set_callbacks(appsink_, &cbs, this, nullptr);
 
-    LockFreeLogger::getInstance().info("custom_pub", name_ + " ready (VideoCapture-like API)");
+    const char* mode = raw_callback_ ? "callback" : "pull";
+    LockFreeLogger::getInstance().info("custom_pub", fmt::format("{} ready ({})", name_, mode));
 }
 
 void CustomPublisher::bringdown(Pipeline* /*parent*/) {
@@ -44,33 +46,6 @@ void CustomPublisher::bringdown(Pipeline* /*parent*/) {
     }
     cv_.notify_all();
     if (appsink_) { gst_object_unref(appsink_); appsink_ = nullptr; }
-}
-
-bool CustomPublisher::read(cv::Mat& frame) {
-    std::vector<uint8_t> raw;
-    Caps caps;
-    if (!read(raw, caps)) return false;
-
-    int cv_type = CV_8UC3;
-    cv::Mat raw_mat;
-
-    switch (caps.format) {
-        case PixelFormat::RGB:
-            raw_mat = cv::Mat(caps.height, caps.width, CV_8UC3, raw.data());
-            cv::cvtColor(raw_mat, frame, cv::COLOR_RGB2BGR);
-            break;
-        case PixelFormat::BGR:
-            frame = cv::Mat(caps.height, caps.width, CV_8UC3, raw.data()).clone();
-            break;
-        case PixelFormat::YUYV:
-            raw_mat = cv::Mat(caps.height, caps.width, CV_8UC2, raw.data());
-            cv::cvtColor(raw_mat, frame, cv::COLOR_YUV2BGR_YUYV);
-            break;
-        default:
-            frame = cv::Mat(caps.height, caps.width, cv_type, raw.data()).clone();
-            break;
-    }
-    return true;
 }
 
 bool CustomPublisher::read(std::vector<uint8_t>& raw, Caps& caps) {
@@ -90,23 +65,23 @@ GstFlowReturn CustomPublisher::onNewSample(GstAppSink* sink, gpointer data) {
     GstSample* sample = gst_app_sink_pull_sample(sink);
     if (!sample) return GST_FLOW_ERROR;
 
-    GstBuffer* buf  = gst_sample_get_buffer(sample);
+    GstBuffer* buf   = gst_sample_get_buffer(sample);
     GstCaps*   gcaps = gst_sample_get_caps(sample);
 
     Frame f;
     if (gcaps) {
         GstVideoInfo vinfo;
         if (gst_video_info_from_caps(&vinfo, gcaps)) {
-            f.caps.width  = vinfo.width;
-            f.caps.height = vinfo.height;
+            f.caps.width   = vinfo.width;
+            f.caps.height  = vinfo.height;
             f.caps.fps_num = vinfo.fps_n;
             f.caps.fps_den = vinfo.fps_d;
             switch (GST_VIDEO_INFO_FORMAT(&vinfo)) {
-                case GST_VIDEO_FORMAT_YUY2:  f.caps.format = PixelFormat::YUYV; break;
-                case GST_VIDEO_FORMAT_NV12:  f.caps.format = PixelFormat::NV12; break;
-                case GST_VIDEO_FORMAT_I420:  f.caps.format = PixelFormat::I420; break;
-                case GST_VIDEO_FORMAT_RGB:   f.caps.format = PixelFormat::RGB;  break;
-                case GST_VIDEO_FORMAT_BGR:   f.caps.format = PixelFormat::BGR;  break;
+                case GST_VIDEO_FORMAT_YUY2:  f.caps.format = PixelFormat::YUYV;    break;
+                case GST_VIDEO_FORMAT_NV12:  f.caps.format = PixelFormat::NV12;    break;
+                case GST_VIDEO_FORMAT_I420:  f.caps.format = PixelFormat::I420;    break;
+                case GST_VIDEO_FORMAT_RGB:   f.caps.format = PixelFormat::RGB;     break;
+                case GST_VIDEO_FORMAT_BGR:   f.caps.format = PixelFormat::BGR;     break;
                 default:                     f.caps.format = PixelFormat::Unknown; break;
             }
         }
@@ -120,13 +95,15 @@ GstFlowReturn CustomPublisher::onNewSample(GstAppSink* sink, gpointer data) {
 
     gst_sample_unref(sample);
 
-    {
+    if (self->raw_callback_) {
+        self->raw_callback_(std::move(f.data), f.caps);
+    } else {
         std::lock_guard<std::mutex> lk(self->mutex_);
         if (self->queue_.size() < self->max_queue_)
             self->queue_.push(std::move(f));
         // else: drop (bounded queue)
+        self->cv_.notify_one();
     }
-    self->cv_.notify_one();
     return GST_FLOW_OK;
 }
 
