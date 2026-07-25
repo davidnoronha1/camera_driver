@@ -17,6 +17,8 @@ option(CAMERA_DRIVER_WITH_CUDA  "Enable NvCUDAPublisher (NvBufSurface + GstCudaM
 set(CAMERA_DRIVER_DEEPSTREAM_DIR "/opt/nvidia/deepstream/deepstream" CACHE PATH
     "DeepStream SDK root (expects sources/includes/ and lib/ beneath it)")
 
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/dependencies.cmake)
+
 # ── Core dependencies ────────────────────────────────────────────────────────
 find_package(PkgConfig REQUIRED)
 
@@ -45,6 +47,8 @@ set(CORE_SOURCES
     src/elements/auto_video_converter.cpp
     src/elements/mkv_recorder_element.cpp
     src/elements/mkv_playback_element.cpp
+    src/elements/mcap_sink_element.cpp
+    src/elements/mcap_source_element.cpp
     src/elements/undistort_element.cpp
     src/gst/undistort_filter.cpp
     src/publishers/mjpeg_publisher.cpp
@@ -71,7 +75,10 @@ target_link_libraries(camera_driver_core
         fmt::fmt
         yaml-cpp
     PRIVATE
-        ${GST_LIBRARIES})
+        ${GST_LIBRARIES}
+        mcap
+        lz4
+        zstd)
 
 target_compile_options(camera_driver_core PRIVATE ${GST_CFLAGS_OTHER})
 
