@@ -12,6 +12,15 @@ namespace camera_driver {
 // MkvPlaybackElement reading it back from a recording, or code setting it
 // directly via pipeline.scratchpad()->set(...)) is picked up automatically.
 //
+// After undistorting, writes the calibration back to the scratchpad with D
+// cleared (identity distortion) — K/width/height are unchanged by either
+// undistort path, only D is remapped away. Any sink downstream of this
+// element (embedding/publishing calibration) therefore sees rectified
+// metadata, not the original lens distortion. This is safe regardless of
+// where in the pipeline sinks sit (including nested MuxElement branches):
+// Pipeline::build() resolves every element's resolver — this scratchpad
+// write included — before any element's setup() runs.
+//
 // If no calibration is present at resolve time, this is a pure passthrough
 // (contributes nothing to the pipeline string). If present:
 //   - GPU path: DeepStream's nvdewarper (projection-type=3, "Perspective to

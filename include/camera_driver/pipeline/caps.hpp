@@ -16,6 +16,10 @@ enum class PixelFormat {
     MJPEG,
     H264,
     H264_NVMM, // H.264 bitstream in NVIDIA memory
+    BayerRGGB,
+    BayerBGGR,
+    BayerGRBG,
+    BayerGBRG,
 };
 
 struct Caps {
@@ -49,6 +53,10 @@ inline std::string pixelFormatName(PixelFormat f) {
         case PixelFormat::MJPEG:    return "MJPEG";
         case PixelFormat::H264:     return "H264";
         case PixelFormat::H264_NVMM: return "H264(NVMM)";
+        case PixelFormat::BayerRGGB: return "BayerRGGB";
+        case PixelFormat::BayerBGGR: return "BayerBGGR";
+        case PixelFormat::BayerGRBG: return "BayerGRBG";
+        case PixelFormat::BayerGBRG: return "BayerGBRG";
         default:                    return "Unknown";
     }
 }
@@ -62,6 +70,10 @@ inline PixelFormat pixelFormatFromString(const std::string& s) {
     if (s == "RGBA")     return PixelFormat::RGBA;
     if (s == "MJPEG")    return PixelFormat::MJPEG;
     if (s == "H264")     return PixelFormat::H264;
+    if (s == "BayerRGGB") return PixelFormat::BayerRGGB;
+    if (s == "BayerBGGR") return PixelFormat::BayerBGGR;
+    if (s == "BayerGRBG") return PixelFormat::BayerGRBG;
+    if (s == "BayerGBRG") return PixelFormat::BayerGBRG;
     return PixelFormat::Unknown;
 }
 
@@ -100,6 +112,18 @@ inline std::string Caps::toGstCapsString() const {
             break;
         case PixelFormat::RGBA:
             base = "video/x-raw,format=RGBA";
+            break;
+        case PixelFormat::BayerRGGB:
+            base = "video/x-bayer,format=rggb";
+            break;
+        case PixelFormat::BayerBGGR:
+            base = "video/x-bayer,format=bggr";
+            break;
+        case PixelFormat::BayerGRBG:
+            base = "video/x-bayer,format=grbg";
+            break;
+        case PixelFormat::BayerGBRG:
+            base = "video/x-bayer,format=gbrg";
             break;
         default:
             return "ANY";

@@ -9,39 +9,53 @@ namespace camera_driver {
 namespace {
 static std::atomic<int> g_avc_id{0};
 
-std::string buildConvString(PixelFormat target) {
-    std::string s = "videoconvert";
+bool isBayer(PixelFormat f) {
+    return f == PixelFormat::BayerRGGB || f == PixelFormat::BayerBGGR ||
+           f == PixelFormat::BayerGRBG || f == PixelFormat::BayerGBRG;
+}
+
+std::string targetCapsSuffix(PixelFormat target) {
     switch (target) {
-        case PixelFormat::I420:  return s + " ! video/x-raw,format=I420";
-        case PixelFormat::NV12:  return s + " ! video/x-raw,format=NV12";
-        case PixelFormat::RGB:   return s + " ! video/x-raw,format=RGB";
-        case PixelFormat::BGR:   return s + " ! video/x-raw,format=BGR";
-        case PixelFormat::YUYV:  return s + " ! video/x-raw,format=YUY2";
-        default:                 return s;
+        case PixelFormat::I420: return " ! video/x-raw,format=I420";
+        case PixelFormat::NV12: return " ! video/x-raw,format=NV12";
+        case PixelFormat::RGB:  return " ! video/x-raw,format=RGB";
+        case PixelFormat::BGR:  return " ! video/x-raw,format=BGR";
+        case PixelFormat::YUYV: return " ! video/x-raw,format=YUY2";
+        default:                return "";
     }
 }
 } // namespace
 
 AutoVideoConverterElement::AutoVideoConverterElement(PixelFormat target)
-    : target_(target)
+    : UnresolvedSegment("auto_conv_" + std::to_string(g_avc_id++), {})
+    , target_(target)
 {
-    name_       = "auto_conv_" + std::to_string(g_avc_id++);
-    gst_string_ = buildConvString(target);
-    output_.format = (target != PixelFormat::Unknown) ? target : PixelFormat::Unknown;
-    output_.is_any = (target == PixelFormat::Unknown);
+    auto* self = this;
+    auto resolver = [self](const PipelineContext& ctx) -> ResolvedSegment {
+        ResolvedSegment seg;
+        seg.name = self->name_;
+        seg.input_caps = ctx.upstream_caps;
+
+        // bayer2rgb must run before videoconvert — videoconvert has no
+        // debayering capability of its own.
+        std::string prefix = isBayer(ctx.upstream_caps.format) ? "bayer2rgb ! " : "";
+        seg.gst_string = prefix + "videoconvert" + targetCapsSuffix(self->target_);
+
+        if (self->target_ != PixelFormat::Unknown) {
+            seg.output_caps.format = self->target_;
+        } else {
+            seg.output_caps.format = (ctx.upstream_caps.format != PixelFormat::Unknown)
+                ? ctx.upstream_caps.format : PixelFormat::YUYV;
+        }
+        return seg;
+    };
+    *static_cast<UnresolvedSegment*>(this) = UnresolvedSegment(name_, std::move(resolver));
 }
 
 void AutoVideoConverterElement::setup(Pipeline* /*parent*/) {
     LockFreeLogger::getInstance().warn("auto_conv",
         fmt::format("[{}] Explicit conversion element active — adds latency. "
             "Consider using OptimizedConverter to avoid this.", name_));
-}
-
-Caps AutoVideoConverterElement::outputCapsFor(PixelFormat input) const {
-    if (!output_.is_any) return output_;
-    Caps c;
-    c.format = (input != PixelFormat::Unknown) ? input : PixelFormat::YUYV;
-    return c;
 }
 
 } // namespace camera_driver

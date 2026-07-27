@@ -52,7 +52,15 @@ void MkvRecorderElement::setup(Pipeline* parent) {
     GstElement* el = parent->getGstElement(name_ + "_mux");
     if (!el) throw std::runtime_error("MkvRecorderElement: matroskamux '" + name_ + "_mux' not found");
     mux_ = el;
-    if (pending_metadata_) applyMetadata(*pending_metadata_);
+
+    // Explicit setMetadata()/metadata_file/calibration_file (this element's
+    // own config) wins; otherwise fall back to whatever the pipeline-level
+    // scratchpad has (see YAMLPipeline::fromFile / Scratchpad::kCameraMetadataKey).
+    if (pending_metadata_) {
+        applyMetadata(*pending_metadata_);
+    } else if (auto yaml = parent->scratchpad()->get(Scratchpad::kCameraMetadataKey)) {
+        applyMetadata(CameraMetadata::fromYaml(*yaml));
+    }
 
     LockFreeLogger::getInstance().info("mkv_recorder",
         fmt::format("{} recording to {}", name_, location_));

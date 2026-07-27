@@ -16,6 +16,9 @@ namespace camera_driver {
 // HTTP multipart MJPEG streaming server. Wraps a GStreamer appsink.
 // Requires MJPEG input; upstream elements (e.g. OptimizedConverter) must
 // encode to JPEG (jpegenc/nvjpegenc) before this publisher.
+//
+// GET /calibration serves the pipeline-level scratchpad's camera metadata
+// (see Scratchpad::kCameraMetadataKey) as YAML, 404 if none was provided.
 class MJPEGPublisher : public PipelineElement {
 public:
     explicit MJPEGPublisher(int port = 8080, int jpeg_quality = 85);
@@ -39,6 +42,11 @@ private:
     int  jpeg_quality_;
     std::string gst_string_;
     PixelFormat received_format_ = PixelFormat::Unknown;
+
+    // Camera calibration/pose YAML (see Scratchpad::kCameraMetadataKey),
+    // read once at setup() and served at GET /calibration. Empty if the
+    // pipeline-level scratchpad had none.
+    std::string calibration_yaml_;
 
     GstAppSink* appsink_ = nullptr;
 

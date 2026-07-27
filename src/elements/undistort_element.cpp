@@ -79,6 +79,34 @@ UndistortElement::UndistortElement()
         CameraMetadata metadata = CameraMetadata::fromYaml(*metadata_yaml);
         if (!metadata.calibration) return passthrough("scratchpad metadata has no calibration");
 
+        {
+            const auto& K = metadata.calibration->K;
+            const auto& D = metadata.calibration->D;
+            std::string d_str;
+            for (size_t i = 0; i < D.size(); ++i) d_str += (i ? ", " : "") + std::to_string(D[i]);
+            log.info("undistort", fmt::format(
+                "{}: found calibration ({}x{}, model={}) K=[{:.3f} {:.3f} {:.3f}; {:.3f} {:.3f} {:.3f}; {:.3f} {:.3f} {:.3f}] D=[{}]",
+                self->name_, metadata.calibration->width, metadata.calibration->height,
+                metadata.calibration->distortion_model.empty() ? "none" : metadata.calibration->distortion_model,
+                K[0], K[1], K[2], K[3], K[4], K[5], K[6], K[7], K[8], d_str));
+        }
+
+        // Both undistort paths remap in place — same K/width/height, only D
+        // (the distortion coefficients) is corrected away. Write the
+        // rectified calibration back to the scratchpad so anything reading
+        // it downstream of this element (sinks embedding/publishing
+        // calibration) sees identity distortion, not the original lens
+        // distortion.
+        auto rectified = metadata;
+        rectified.calibration->D.clear();
+        rectified.calibration->distortion_model.clear();
+        ctx.pipeline->scratchpad()->set(Scratchpad::kCameraMetadataKey, rectified.toYaml());
+
+        log.info("undistort", fmt::format(
+            "{}: distortion has been corrected — scratchpad calibration reset to identity D "
+            "(K/width/height unchanged); downstream elements/sinks must NOT re-apply distortion "
+            "correction using the original D", self->name_));
+
         if (ctx.hw.has_nvdewarper && ctx.hw.has_nvvidconv) {
             std::string config_path = fmt::format("/tmp/camera_driver_undistort_{}.cfg", self->name_);
             writeDewarperConfig(config_path, *metadata.calibration);

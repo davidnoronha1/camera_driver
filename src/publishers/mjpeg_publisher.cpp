@@ -62,11 +62,15 @@ void MJPEGPublisher::setup(Pipeline* parent) {
         throw std::runtime_error(fmt::format("MJPEGPublisher: cannot bind port {}", port_));
     }
 
+    if (auto yaml = parent->scratchpad()->get(Scratchpad::kCameraMetadataKey))
+        calibration_yaml_ = *yaml;
+
     running_ = true;
     listen_thread_ = std::thread(&MJPEGPublisher::listenLoop, this);
 
     LockFreeLogger::getInstance().info("mjpeg_pub",
-        fmt::format("{} HTTP MJPEG server on http://0.0.0.0:{}/", name_, port_));
+        fmt::format("{} HTTP MJPEG server on http://0.0.0.0:{}/ ({} /calibration)", name_, port_,
+            calibration_yaml_.empty() ? "no" : "serving"));
 }
 
 void MJPEGPublisher::bringdown(Pipeline* /*parent*/) {
@@ -133,9 +137,24 @@ void MJPEGPublisher::listenLoop() {
 }
 
 void MJPEGPublisher::serveClient(int fd) {
-    // Read HTTP request (discard)
-    char buf[1024];
-    recv(fd, buf, sizeof(buf), 0);
+    // Read HTTP request line, e.g. "GET /calibration HTTP/1.1"
+    char buf[1024] = {};
+    ssize_t n = recv(fd, buf, sizeof(buf) - 1, 0);
+    std::string request(buf, n > 0 ? static_cast<size_t>(n) : 0);
+    bool want_calibration = request.rfind("GET /calibration", 0) == 0;
+
+    if (want_calibration) {
+        std::string body = calibration_yaml_;
+        std::string resp = fmt::format(
+            "HTTP/1.1 {} \r\n"
+            "Content-Type: text/yaml\r\n"
+            "Content-Length: {}\r\n"
+            "Connection: close\r\n\r\n{}",
+            body.empty() ? "404 Not Found" : "200 OK", body.size(), body);
+        send(fd, resp.c_str(), resp.size(), MSG_NOSIGNAL);
+        ::close(fd);
+        return;
+    }
 
     // Send HTTP headers
     const char* header =

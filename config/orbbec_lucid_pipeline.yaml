@@ -1,0 +1,92 @@
+# Orbbec + Lucid dual-camera pipeline: each captures raw (not pre-encoded),
+# then fans out to iceoryx (save), TCP/HTTP JPEG (dashboard preview), and a
+# raw GPU frame handoff straight to inference — no encode/decode round trip
+# for the inference branch, since it taps the same raw frame the other
+# branches encode from.
+
+# ── Orbbec / Astra 2 (V4L2, captured raw) ───────────────────────────────────
+pipeline:
+  type: Pipeline
+
+elements:
+  - type: V4L2SrcElement
+    selection:
+      - mode: serial
+        serial: "ORBBEC_SERIAL_HERE"
+      - mode: interactive
+    width: 1280
+    height: 720
+    fps: 30
+
+  - type: MuxElement
+    branches:
+      # Encode once, then tee to both JPEG consumers.
+      - - type: OptimizedConverter
+          outputs: [MJPEG]
+        - type: MuxElement
+          branches:
+            - - type: IceOryxPublisher
+                topic: "Orbbec/Camera/JPEG"
+            - - type: MJPEGPublisher
+                port: 8080
+                quality: 85
+
+      - - type: NVUnixFDPublisher   # raw frame, straight to inference
+          socket: /tmp/camera_nv.sock
+
+---
+# ── Lucid camera (ArenaSDK, not V4L2) ────────────────────────────────────────
+# Frames pushed from app code via CustomSrcElement, raw Bayer bytes (no
+# debayering in the capture callback needed — AutoVideoConverterElement
+# inserts bayer2rgb automatically wherever a Bayer source feeds it).
+pipeline:
+  type: Pipeline
+
+elements:
+  - type: CustomSrcElement
+    width: 1920
+    height: 1200
+    format: BayerRGGB
+    fps: 30
+
+  - type: AutoVideoConverterElement
+    target: RGB
+
+  - type: MuxElement
+    branches:
+      # Encode once, then tee to both JPEG consumers.
+      - - type: OptimizedConverter
+          outputs: [MJPEG]
+        - type: MuxElement
+          branches:
+            - - type: IceOryxPublisher
+                topic: "Lucid/Camera/JPEG"
+            - - type: MJPEGPublisher
+                port: 8081
+                quality: 85
+
+      - - type: NVUnixFDPublisher   # raw frame, straight to inference
+          socket: /tmp/camera_nv_lucid.sock
+
+---
+# ── Inference sub-pipeline ───────────────────────────────────────────────────
+# Reads the raw GPU frame handed off above, fans out to 3 Triton inferserver
+# instances (each config's own network-input dims handle any resize).
+pipeline:
+  type: Pipeline
+
+elements:
+  - type: NvUnixFdSrcElement
+    socket: /tmp/camera_nv.sock   # or camera_nv_lucid.sock
+    format: nv12_nvmm
+    width: 1280
+    height: 720
+
+  - type: MuxElement
+    branches:
+      - - type: InferServerElement
+          config_file: configs/inferserver_1.txt
+      - - type: InferServerElement
+          config_file: configs/inferserver_2.txt
+      - - type: InferServerElement
+          config_file: configs/inferserver_3.txt

@@ -1,6 +1,7 @@
 #include "camera_driver/elements/mcap_sink_element.hpp"
 #include "camera_driver/element_registry.hpp"
 #include "camera_driver/lflogger.hpp"
+#include "camera_driver/metadata/camera_metadata.hpp"
 #include "camera_driver/pipeline/pipeline.hpp"
 #include <atomic>
 #include <fmt/format.h>
@@ -91,6 +92,19 @@ void McapSinkElement::setup(Pipeline* parent) {
         mcap::Channel channel(kVideoTopic, "raw", schema.id, meta);
         writer_.addChannel(channel);
         video_channel_id_ = channel.id;
+
+        // File-level calibration/pose metadata (see Scratchpad::kCameraMetadataKey),
+        // written once as a named Metadata record — not tied to any channel.
+        if (auto yaml = parent->scratchpad()->get(Scratchpad::kCameraMetadataKey)) {
+            mcap::Metadata camera_metadata;
+            camera_metadata.name = "camera-metadata";
+            camera_metadata.metadata["yaml"] = *yaml;
+            auto status = writer_.write(camera_metadata);
+            if (!status.ok()) {
+                LockFreeLogger::getInstance().error("mcap_sink",
+                    fmt::format("{} failed to write camera-metadata: {}", name_, status.message));
+            }
+        }
     }
 
     GstAppSinkCallbacks cbs{};

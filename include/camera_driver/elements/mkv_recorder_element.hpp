@@ -29,7 +29,10 @@ public:
     void bringdown(Pipeline* parent) override;
 
     // Callable before or after setup()/build() — applied immediately if the
-    // muxer element already exists, otherwise applied during setup().
+    // muxer element already exists, otherwise applied during setup(). Takes
+    // priority over the pipeline-level scratchpad metadata (see
+    // Scratchpad::kCameraMetadataKey), which is used as a fallback in
+    // setup() when this was never called.
     void setMetadata(const CameraMetadata& metadata);
 
 private:

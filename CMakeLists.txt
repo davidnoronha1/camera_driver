@@ -8,9 +8,10 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 # ── Options ──────────────────────────────────────────────────────────────────
-option(CAMERA_DRIVER_WITH_ROS2  "Enable ROS2 publisher and node"  OFF)
-option(CAMERA_DRIVER_WITH_RTSP  "Enable RTSP pipeline support"    ON)
-option(CAMERA_DRIVER_WITH_CUDA  "Enable NvCUDAPublisher (NvBufSurface + GstCudaMemory)" OFF)
+option(CAMERA_DRIVER_WITH_ROS2    "Enable ROS2 publisher and node"  OFF)
+option(CAMERA_DRIVER_WITH_RTSP    "Enable RTSP pipeline support"    ON)
+option(CAMERA_DRIVER_WITH_CUDA    "Enable NvCUDAPublisher (NvBufSurface + GstCudaMemory)" OFF)
+option(CAMERA_DRIVER_WITH_ICEORYX "Enable IceOryxPublisher (requires system-installed iceoryx_posh)" OFF)
 
 # Root of the DeepStream SDK install, used to locate nvbufsurface headers/libs
 # when CAMERA_DRIVER_WITH_CUDA is enabled.
@@ -50,6 +51,7 @@ set(CORE_SOURCES
     src/elements/mcap_sink_element.cpp
     src/elements/mcap_source_element.cpp
     src/elements/undistort_element.cpp
+    src/elements/infer_server_element.cpp
     src/gst/undistort_filter.cpp
     src/publishers/mjpeg_publisher.cpp
     src/publishers/nv_unixfd_publisher.cpp
@@ -176,6 +178,22 @@ if(CAMERA_DRIVER_BUILD_CUDA_DEMO)
                 "red-tint kernel needs a CUDA compiler, not just the runtime).")
         endif()
     endif()
+endif()
+
+# ── Optional: IceOryxPublisher (raw frames over iceoryx shared memory) ──────
+if(CAMERA_DRIVER_WITH_ICEORYX)
+    find_package(iceoryx_platform 2.95.8 QUIET)
+    find_package(iceoryx_hoofs    2.95.8 QUIET)
+    find_package(iceoryx_posh     2.95.8 QUIET)
+endif()
+
+if(CAMERA_DRIVER_WITH_ICEORYX AND iceoryx_posh_FOUND)
+    target_sources(camera_driver_core PRIVATE src/publishers/iceoryx_publisher.cpp)
+    target_compile_definitions(camera_driver_core PUBLIC CAMERA_DRIVER_WITH_ICEORYX)
+    target_link_libraries(camera_driver_core PRIVATE iceoryx_posh::iceoryx_posh)
+elseif(CAMERA_DRIVER_WITH_ICEORYX AND NOT iceoryx_posh_FOUND)
+    message(WARNING "iceoryx_posh (>=2.95.8) not found — IceOryxPublisher disabled. "
+        "Install iceoryx_platform/iceoryx_hoofs/iceoryx_posh to enable it.")
 endif()
 
 # ── Standalone executable (pure CMake, no ROS2) ──────────────────────────────

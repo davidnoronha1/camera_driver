@@ -24,6 +24,10 @@ namespace camera_driver {
 // (analogous to CustomSrcElement::write()/CustomPublisher::read()) with
 // already-serialized bytes (e.g. a JSON string) and a real timestamp. Each
 // topic gets its own MCAP channel, created lazily on first use.
+//
+// If the pipeline-level scratchpad has calibration/pose metadata (see
+// Scratchpad::kCameraMetadataKey), it's written once at setup() as a
+// file-level MCAP Metadata record named "camera-metadata".
 class McapSinkElement : public UnresolvedSegment {
 public:
     static constexpr const char* kVideoTopic = "camera/frame";

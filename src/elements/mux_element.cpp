@@ -41,6 +41,16 @@ void MuxElement::buildBranches(const PipelineContext& ctx) {
                 ResolvedSegment r = seg->resolve(branch_ctx);
                 branch_ctx.upstream_caps = r.output_caps;
                 branch_segs.push_back(std::move(r));
+            } else if (el->isMux()) {
+                auto* nested = static_cast<MuxElement*>(el.get());
+                nested->buildBranches(branch_ctx);
+                ResolvedSegment r;
+                r.name = el->name();
+                r.input_caps = branch_ctx.upstream_caps;
+                r.gst_string = nested->gstString();
+                r.output_caps.is_any = true;
+                branch_ctx.upstream_caps = r.output_caps;
+                if (!r.gst_string.empty()) branch_segs.push_back(std::move(r));
             } else {
                 Caps out = el->outputCapsFor(branch_ctx.upstream_caps.format);
                 ResolvedSegment r;

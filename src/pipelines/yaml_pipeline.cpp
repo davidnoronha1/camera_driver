@@ -1,6 +1,7 @@
 #include "camera_driver/pipelines/yaml_pipeline.hpp"
 #include "camera_driver/element_registry.hpp"
 #include "camera_driver/lflogger.hpp"
+#include "camera_driver/metadata/camera_metadata.hpp"
 
 #ifdef CAMERA_DRIVER_WITH_RTSP
 #include "camera_driver/pipelines/rtsp_pipeline.hpp"
@@ -8,6 +9,7 @@
 
 #include <fmt/format.h>
 #include <fstream>
+#include <sstream>
 #include <stdexcept>
 
 namespace camera_driver {
@@ -44,6 +46,24 @@ std::unique_ptr<Pipeline> YAMLPipeline::fromFile(const std::string& path) {
 #endif
     {
         pipeline = std::make_unique<Pipeline>();
+    }
+
+    // Calibration/pose metadata, if provided, is the single source every
+    // sink pulls from via Pipeline::scratchpad() (Scratchpad::kCameraMetadataKey)
+    // — no per-element metadata_file/calibration_file wiring needed.
+    if (root["pipeline"] && (root["pipeline"]["metadata_file"] || root["pipeline"]["calibration_file"])) {
+        CameraMetadata metadata;
+        if (root["pipeline"]["metadata_file"]) {
+            std::ifstream in(root["pipeline"]["metadata_file"].as<std::string>());
+            std::stringstream ss;
+            ss << in.rdbuf();
+            metadata = CameraMetadata::fromYaml(ss.str());
+        } else {
+            metadata.calibration = CameraMetadata::calibrationFromYamlFile(
+                root["pipeline"]["calibration_file"].as<std::string>());
+        }
+        pipeline->scratchpad()->set(Scratchpad::kCameraMetadataKey, metadata.toYaml());
+        log.info("yaml_pipeline", "Loaded camera metadata into pipeline scratchpad");
     }
 
     // Build element list
