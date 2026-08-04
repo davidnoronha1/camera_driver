@@ -21,6 +21,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # fmt + yaml-cpp
     libfmt-dev \
     libyaml-cpp-dev \
+    # mcap's lz4/zstd deps
+    liblz4-dev \
+    libzstd-dev \
     # V4L2 userspace tools (v4l2-ctl, v4l2-compliance)
     v4l-utils \
     # X11 client libs for DisplayPublisher (fpsdisplaysink)
