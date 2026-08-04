@@ -104,13 +104,22 @@ naming a registered element type and its options.
 
 ## Docker
 
-A dev container is provided for DeepStream/NVIDIA testing (bare-host glibc is too old
-for the DeepStream 9.0 base image):
+Both images (GPU `dev`, CPU-only `nogpu`) are built and published to
+`ghcr.io/davidnoronha1/camera_driver` by GitHub Actions
+(`.github/workflows/docker-build.yml`) on every push. Local tooling pulls those
+published images instead of building:
 
 ```bash
-docker compose build
+# Prefer the published image; build locally only if it hasn't been published yet.
+make pull-docker            # or: make pull-docker-nogpu
 docker compose run --rm camera_driver bash
 ```
+
+`docker-compose.yml` references the published images, so a plain `docker compose run`
+pulls them on first use (compose's default `pull_policy: missing`) instead of
+building. To rebuild locally explicitly (e.g. for a change that isn't published
+yet), `make build-docker` / `make build-docker-nogpu` — the local build shadows the
+published image until you `docker compose pull` again.
 
 The container mounts the repo at `/workspace/camera_driver` (edit pipelines/configs
 without rebuilding), forwards X11 for `DisplayPublisher`, and requests the NVIDIA

@@ -1,9 +1,14 @@
 services:
   camera_driver:
+    # Prefer the image published by GitHub Actions (ghcr.io) — the default
+    # pull behavior pulls it on first use instead of building locally.
+    # Building is still available as an explicit fallback via
+    # `docker compose build` (overrides the published image until you
+    # `docker compose pull` again).
+    image: ghcr.io/davidnoronha1/camera_driver:dev
     build:
       context: .
       dockerfile: docker/Dockerfile
-    image: camera_driver:dev
 
     # ── Networking / IPC ─────────────────────────────────────────────────────
     network_mode: host
@@ -59,5 +64,39 @@ services:
     # Allow the container user to read video devices. Not strictly needed for
     # DRM (the Dockerfile never sets USER, so the container runs as root and
     # bypasses device group checks), but harmless to keep for /dev/video0.
+    group_add:
+      - video
+
+  # ── CPU-only variant ─────────────────────────────────────────────────────
+  # No NVIDIA GPU reservation and no DeepStream base image — plain Docker
+  # only. Use on hosts without an NVIDIA GPU/driver/container-toolkit; builds
+  # with CAMERA_DRIVER_WITH_CUDA=OFF (x264enc/qsvh264enc fallback only, no
+  # NvCUDAPublisher/InferServerElement). See docker/Dockerfile.nogpu.
+  camera_driver_nogpu:
+    image: ghcr.io/davidnoronha1/camera_driver:nogpu
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.nogpu
+
+    network_mode: host
+    ipc: host
+
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+      - XAUTHORITY=/tmp/.docker.xauth
+      - GST_DEBUG=3
+
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XAUTHORITY:-~/.Xauthority}:/tmp/.docker.xauth:ro
+      - .:/workspace/camera_driver
+      # Same rationale as the GPU service above: keep the container's own
+      # build/ (built against container libs) from being shadowed by the
+      # host's build/ via the bind mount.
+      - /workspace/camera_driver/build
+
+    devices:
+      - /dev/video0:/dev/video0
+      - /dev/dri:/dev/dri
     group_add:
       - video
