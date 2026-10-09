@@ -1,0 +1,61 @@
+# CPU-only build: plain Ubuntu base, no DeepStream/CUDA. Use this when no
+# NVIDIA GPU is present — OptimizedConverter falls back to x264enc/qsvh264enc
+# and NvCUDAPublisher/InferServerElement stay disabled.
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Build toolchain
+    cmake \
+    build-essential \
+    pkg-config \
+    git \
+    ca-certificates \
+    # GStreamer dev headers + runtime plugins (DeepStream ships these
+    # pre-installed; a plain Ubuntu base needs them added explicitly)
+    libgstreamer1.0-dev \
+    libgstreamer-plugins-base1.0-dev \
+    libgstreamer-plugins-bad1.0-dev \
+    libgstrtspserver-1.0-dev \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-plugins-ugly \
+    gstreamer1.0-libav \
+    gstreamer1.0-tools \
+    # X11 video sinks (ximagesink/xvimagesink) — packaged separately from
+    # plugins-base on Debian/Ubuntu. Without this, autovideosink falls back
+    # to kmssink, which fails with "drmModeSetPlane: Permission denied" when
+    # an Xorg session already holds DRM master.
+    gstreamer1.0-x \
+    # fmt + yaml-cpp + mcap's lz4/zstd deps
+    libfmt-dev \
+    libyaml-cpp-dev \
+    liblz4-dev \
+    libzstd-dev \
+    # V4L2 userspace tools (v4l2-ctl, v4l2-compliance)
+    v4l-utils \
+    # X11 client libs for DisplayPublisher (fpsdisplaysink)
+    libx11-dev \
+    x11-apps \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Build camera_driver ───────────────────────────────────────────────────────
+WORKDIR /workspace/camera_driver
+COPY . .
+
+RUN cmake -B build \
+        -DCAMERA_DRIVER_WITH_ROS2=OFF \
+        -DCAMERA_DRIVER_WITH_RTSP=ON \
+        -DCAMERA_DRIVER_WITH_CUDA=OFF \
+        -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build build --parallel "$(nproc)" \
+    && cmake --install build --prefix /usr/local
+
+# ── Runtime default ───────────────────────────────────────────────────────────
+# Override CMD to pass a different pipeline YAML:
+#   docker compose run camera-driver-nogpu /workspace/camera_driver/config/my_pipeline.yaml
+CMD ["/usr/local/bin/camera_driver_exe", \
+     "/workspace/camera_driver/config/example_pipeline.yaml"]

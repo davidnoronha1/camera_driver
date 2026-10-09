@@ -1,0 +1,24 @@
+pipeline:
+  type: Pipeline
+
+elements:
+  - type: V4L2SrcElement
+    selection:
+      - mode: interactive       # pick camera from terminal menu on startup
+    width: 1280
+    height: 720
+    fps: 30
+
+  - type: OptimizedConverter
+    outputs: [MJPEG]
+    quality: 85
+
+  - type: MuxElement
+    branches:
+      # Branch 1: HTTP MJPEG stream — open http://localhost:8080 in a browser
+      - - type: MJPEGPublisher
+          port: 8080
+
+      # Branch 2: on-screen debug window with FPS and latency overlay
+      - - type: DisplayPublisher
+          window: "Camera Debug View"

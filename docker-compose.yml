@@ -1,0 +1,102 @@
+services:
+  camera_driver:
+    # Prefer the image published by GitHub Actions (ghcr.io) — the default
+    # pull behavior pulls it on first use instead of building locally.
+    # Building is still available as an explicit fallback via
+    # `docker compose build` (overrides the published image until you
+    # `docker compose pull` again).
+    image: ghcr.io/davidnoronha1/camera_driver:dev
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+
+    # ── Networking / IPC ─────────────────────────────────────────────────────
+    network_mode: host
+    ipc: host
+
+    # ── NVIDIA GPU ───────────────────────────────────────────────────────────
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, video, compute, utility]
+
+    # ── Environment ──────────────────────────────────────────────────────────
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+      # Mapped to a fixed path so the container always finds it regardless of
+      # where the host keeps the file (see volumes below).
+      - XAUTHORITY=/tmp/.docker.xauth
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=video,compute,utility,display
+      # DeepStream plugin path — already set in the base image, kept explicit.
+      - GST_PLUGIN_PATH=/opt/nvidia/deepstream/deepstream/lib/gst-plugins
+      - GST_DEBUG=3
+
+    # ── Volumes ──────────────────────────────────────────────────────────────
+    volumes:
+      # X11 Unix socket
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # Host XAUTHORITY → fixed container path (set XAUTHORITY on host first,
+      # defaults to ~/.Xauthority when unset).
+      - ${XAUTHORITY:-~/.Xauthority}:/tmp/.docker.xauth:ro
+      # Source + configs mounted so you can edit pipelines without rebuilding.
+      - .:/workspace/camera_driver
+      # Anonymous volume: keeps the container's own in-image build/ directory
+      # (built against container libs, e.g. libfmt.so.9) from being shadowed by
+      # the host's build/ (built against host libs, e.g. libfmt.so.8) via the
+      # bind mount above. Without this, running build/camera_driver_exe inside
+      # the container loads a host-linked binary and fails with
+      # "libfmt.so.8: cannot open shared object file".
+      - /workspace/camera_driver/build
+
+    # ── Device access ────────────────────────────────────────────────────────
+    # Add video devices for V4L2 cameras. Extend this list as needed.
+    devices:
+      - /dev/video0:/dev/video0
+      # DRM/KMS + render nodes for the host's display GPU (needed by kmssink
+      # for direct KMS output, and by any EGL/DRI2 sink for windowed
+      # rendering against the X server). Without this, kmssink can't open a
+      # DRM module at all, and GL-based sinks fail DRI2/EGL screen creation.
+      - /dev/dri:/dev/dri
+    # Allow the container user to read video devices. Not strictly needed for
+    # DRM (the Dockerfile never sets USER, so the container runs as root and
+    # bypasses device group checks), but harmless to keep for /dev/video0.
+    group_add:
+      - video
+
+  # ── CPU-only variant ─────────────────────────────────────────────────────
+  # No NVIDIA GPU reservation and no DeepStream base image — plain Docker
+  # only. Use on hosts without an NVIDIA GPU/driver/container-toolkit; builds
+  # with CAMERA_DRIVER_WITH_CUDA=OFF (x264enc/qsvh264enc fallback only, no
+  # NvCUDAPublisher/InferServerElement). See docker/Dockerfile.nogpu.
+  camera_driver_nogpu:
+    image: ghcr.io/davidnoronha1/camera_driver:nogpu
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.nogpu
+
+    network_mode: host
+    ipc: host
+
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+      - XAUTHORITY=/tmp/.docker.xauth
+      - GST_DEBUG=3
+
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XAUTHORITY:-~/.Xauthority}:/tmp/.docker.xauth:ro
+      - .:/workspace/camera_driver
+      # Same rationale as the GPU service above: keep the container's own
+      # build/ (built against container libs) from being shadowed by the
+      # host's build/ via the bind mount.
+      - /workspace/camera_driver/build
+
+    devices:
+      - /dev/video0:/dev/video0
+      - /dev/dri:/dev/dri
+    group_add:
+      - video

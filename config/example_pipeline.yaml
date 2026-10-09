@@ -1,0 +1,112 @@
+# Example camera_driver pipeline configuration.
+# Run with: camera_driver_exe config/example_pipeline.yaml
+
+pipeline:
+  type: RTSPPipeline       # Pipeline or RTSPPipeline
+  port: 8554
+  mount_point: /stream
+
+elements:
+  # ── Source ─────────────────────────────────────────────────────────────────
+  - type: V4L2SrcElement
+    # Multiple selection criteria, tried in order until one succeeds.
+    # Remove or reorder as needed.
+    selection:
+      - mode: serial
+        serial: "ABC123"       # Replace with your camera's USB serial
+      - mode: port
+        bus_id: "usb-0000:00:14.0-1"  # Replace with your USB port bus_info
+      - mode: interactive      # Last resort: interactive menu
+    width: 1920
+    height: 1080
+    fps: 30
+
+  # ── Converter/Encoder ──────────────────────────────────────────────────────
+  # OptimizedConverter picks the best hardware path automatically.
+  # On NVIDIA: uses nvh264enc (desktop) or nvv4l2h264enc (Jetson).
+  # On Intel:  uses qsvh264enc.
+  # Fallback:  x264enc (software).
+  - type: OptimizedConverter
+    outputs: [H264]
+    bitrate_kbps: 4000
+    encoders: [qsvh264enc, v4l2h264enc, x264enc]
+    # Optional: resize in the same hardware step (no extra copy)
+    # resize:
+    #   width: 1280
+    #   height: 720
+
+  # ── Fan-out (optional) ────────────────────────────────────────────────────
+  # Uncomment to add additional outputs alongside RTSP.
+  # - type: MuxElement
+  #   branches:
+  #     - - type: MJPEGPublisher
+  #         port: 8080
+  #         quality: 85
+  #     - - type: NVUnixFDPublisher
+  #         socket: /tmp/camera_nv.sock
+  #     - - type: MkvRecorderElement
+  #         location: /tmp/camera_driver_out.mkv
+  #         # ROS camera_info-style calibration YAML (camera_matrix/distortion_model/...).
+  #         calibration_file: config/example_calibration.yaml
+  #         # Alternatively, a full CameraMetadata YAML (calibration + pose,
+  #         # the same schema CameraMetadata::toYaml() writes) — takes
+  #         # precedence over calibration_file if both are given.
+  #         # metadata_file: config/example_metadata.yaml
+  #     - - type: McapSinkElement
+  #         location: /tmp/camera_driver_out.mcap
+  #         # Video frames are recorded automatically, same as MkvRecorderElement.
+  #         # To attach synced aux data (GPS, IMU, or anything else — schema-free,
+  #         # any number of topics, each at its own rate), call from app code
+  #         # once you have the McapSinkElement instance (e.g. after Pipeline::build()):
+  #         #   mcap_sink->writeTopic("gps", mcap_sink->nowNs(), json_bytes, json_len);
+  #         # McapSourceElement (McapPlaybackElement's counterpart) reads it back
+  #         # the same way MkvPlaybackElement reads an .mkv, but also lets you
+  #         # register a callback per aux topic to receive those samples back in
+  #         # sync with the replayed video:
+  #         #   mcap_source->setTopicCallback("gps", [](auto topic, uint64_t ts,
+  #         #       const uint8_t* data, size_t size) { ... });
+
+---
+# Alternative: MJPEG-only pipeline (no RTSP, runs as plain Pipeline)
+#
+# pipeline:
+#   type: Pipeline
+#
+# elements:
+#   - type: V4L2SrcElement
+#     selection:
+#       - mode: interactive
+#     width: 0   # auto
+#     height: 0  # auto
+#     fps: 30
+#
+#   - type: OptimizedConverter
+#     outputs: [MJPEG]
+#     quality: 90
+#
+#   - type: MJPEGPublisher
+#     port: 8080
+
+---
+# Alternative: play back a recording made by MkvRecorderElement, undistorting
+# it automatically using the calibration embedded in the file — no manual
+# passing of calibration required. MkvPlaybackElement reads the file's
+# camera-metadata and publishes it to the pipeline's scratchpad;
+# UndistortElement picks it up from there on its own. If the file has no
+# calibration (or nvdewarper isn't installed), UndistortElement is a
+# no-op passthrough instead of an error.
+#
+# Note: MkvPlaybackElement must come before UndistortElement in the elements
+# list — the scratchpad publish happens while the pipeline is being resolved,
+# in element order.
+#
+# pipeline:
+#   type: Pipeline
+#
+# elements:
+#   - type: MkvPlaybackElement
+#     location: /tmp/camera_driver_out.mkv
+#
+#   - type: UndistortElement
+#
+#   - type: DisplayPublisher
