@@ -2,8 +2,13 @@
 //! kernel: no WASI, no imports required. A host passes text in through
 //! `cd_alloc`'d buffers and reads a JSON result back; see web/host.js.
 //!
-//!   cd_plan(...)            config text -> JSON plan (gst or web backend)
-//!   cd_undistort_*          CPU lens undistortion fallback for RGBA frames
+//!   cd_plan(...)              config text -> JSON plan (gst or web backend)
+//!   cd_register_manifest(...) add element types from a plugin manifest (web plugin backend)
+//!   cd_list_elements()        JSON catalogue of registered element types
+//!   cd_undistort_*            CPU lens undistortion fallback for RGBA frames
+//!
+//! Native (dlopen) plugins do not exist here; the web equivalent of a plugin
+//! is a manifest plus JS `impl`s (see web/host.js `loadWebPlugin`).
 
 const std = @import("std");
 const cd = @import("camera_driver");
@@ -12,6 +17,20 @@ const gpa = std.heap.wasm_allocator;
 
 var result_arena: ?std.heap.ArenaAllocator = null;
 var result_json: []const u8 = &.{};
+
+/// Element catalogue; persists across cd_plan calls so manifests stay registered.
+var registry: ?cd.registry.Registry = null;
+
+fn getRegistry() *cd.registry.Registry {
+    if (registry == null) registry = cd.registry.Registry.init(gpa) catch @panic("out of memory");
+    return &registry.?;
+}
+
+fn resetResult() std.mem.Allocator {
+    if (result_arena) |*a| a.deinit();
+    result_arena = std.heap.ArenaAllocator.init(gpa);
+    return result_arena.?.allocator();
+}
 
 export fn cd_alloc(len: usize) ?[*]u8 {
     const buf = gpa.alloc(u8, len) catch return null;
@@ -50,11 +69,10 @@ export fn cd_plan(
     meta_ptr: ?[*]const u8,
     meta_len: usize,
 ) usize {
-    if (result_arena) |*a| a.deinit();
-    result_arena = std.heap.ArenaAllocator.init(gpa);
-    const arena = result_arena.?.allocator();
+    const arena = resetResult();
 
     var req: cd.session.Request = .{
+        .registry = getRegistry(),
         .source = src_ptr[0..src_len],
         .backend = if (backend == 1) .web else .gst,
         .doc_index = doc_index,
@@ -72,6 +90,54 @@ export fn cd_plan(
 
     const result = cd.session.run(arena, req);
     result_json = cd.session.toJson(arena, result) catch "{\"ok\":false,\"error\":\"out of memory\"}";
+    return result_json.len;
+}
+
+/// Register the elements declared by a plugin manifest (JSON). Returns the
+/// length of a JSON result: {"ok":true,"plugin":"name"} or {"ok":false,"error":"..."}.
+export fn cd_register_manifest(ptr: [*]const u8, len: usize) usize {
+    const arena = resetResult();
+    var diag: cd.manifest.Diagnostic = .{};
+    const reg = getRegistry();
+    if (cd.manifest.register(reg, ptr[0..len], &diag)) |name| {
+        result_json = std.fmt.allocPrint(arena, "{{\"ok\":true,\"plugin\":\"{s}\"}}", .{name}) catch "{\"ok\":false}";
+    } else |_| {
+        var w = cd.json.Writer.init(arena);
+        w.beginObject() catch {};
+        w.key("ok") catch {};
+        w.boolean(false) catch {};
+        w.key("error") catch {};
+        w.string(diag.message) catch {};
+        w.endObject() catch {};
+        result_json = w.bytes();
+    }
+    return result_json.len;
+}
+
+/// JSON array of {type, role, origin, gst, web} for every registered element.
+export fn cd_list_elements() usize {
+    const arena = resetResult();
+    const reg = getRegistry();
+    var w = cd.json.Writer.init(arena);
+    w.beginArray() catch {};
+    const names = reg.typeNames(arena) catch &[_][]const u8{};
+    for (names) |n| {
+        const e = reg.find(n).?;
+        w.beginObject() catch {};
+        w.key("type") catch {};
+        w.string(e.type_name) catch {};
+        w.key("role") catch {};
+        w.string(@tagName(e.role)) catch {};
+        w.key("origin") catch {};
+        w.string(e.origin) catch {};
+        w.key("gst") catch {};
+        w.boolean(e.backends & cd.plugin_abi.backend_gst != 0) catch {};
+        w.key("web") catch {};
+        w.boolean(e.backends & cd.plugin_abi.backend_web != 0) catch {};
+        w.endObject() catch {};
+    }
+    w.endArray() catch {};
+    result_json = w.bytes();
     return result_json.len;
 }
 

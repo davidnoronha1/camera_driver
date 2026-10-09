@@ -13,7 +13,9 @@ const calib = @import("calib.zig");
 const graph_mod = @import("graph.zig");
 const hw_mod = @import("hw.zig");
 const negotiate = @import("negotiate.zig");
+const native = @import("native.zig");
 const plan_mod = @import("plan.zig");
+const registry_mod = @import("registry.zig");
 const props = @import("props.zig");
 
 const Caps = caps_mod.Caps;
@@ -35,10 +37,15 @@ pub const Error = error{
     UnsupportedTarget,
     InvalidOption,
     UnsupportedOnGst,
+    MissingOption,
+    BadTemplate,
+    PluginFailed,
+    NoGstLowering,
     OutOfMemory,
 };
 
 pub const Options = struct {
+    registry: *const registry_mod.Registry,
     hw: HwCaps = HwCaps.software,
     /// Per-node device info, keyed by node name (`v4l2_src_0`). A node's own
     /// `device:` option overrides the path.
@@ -83,6 +90,11 @@ pub const GstPipelineFactory = struct {
         if (eq(t, "IceOryxPublisher")) return &.{ .rgb, .bgr, .yuyv, .nv12 };
         if (eq(t, "ROS2Publisher")) return &.{.rgb};
         if (eq(t, "CustomPublisher")) return &.{ .rgb, .bgr, .yuyv };
+        if (self.opts.registry.find(t)) |entry| switch (entry.kind) {
+            .builtin => {},
+            .manifest => |m| return m.preferred_inputs,
+            .native => |def| return native.preferredInputs(self.gpa, def, node) catch &.{},
+        };
         return &.{};
     }
 
@@ -108,7 +120,39 @@ pub const GstPipelineFactory = struct {
         if (eq(t, "CustomPublisher")) return customPublisher(ctx, node);
         if (eq(t, "DisplayPublisher")) return self.display(ctx, node);
         if (eq(t, "NVUnixFDPublisher")) return self.nvUnixFdPublisher(ctx, node);
-        return error.UnsupportedOnGst;
+        return self.lowerPlugin(ctx, node);
+    }
+
+    /// Elements added at runtime: declarative manifests or native plugins.
+    fn lowerPlugin(self: *GstPipelineFactory, ctx: *LowerCtx, node: *const Node) !Lowered {
+        const entry = self.opts.registry.find(node.type_name) orelse return error.UnsupportedOnGst;
+        switch (entry.kind) {
+            .builtin => return error.UnsupportedOnGst,
+            .native => |def| return native.lower(def, ctx, self.opts.hw, node) catch |e| switch (e) {
+                error.PluginFailed => return error.PluginFailed,
+                error.NoGstLowering => return error.NoGstLowering,
+                error.OutOfMemory => return error.OutOfMemory,
+            },
+            .manifest => |m| {
+                const template = m.gst_template orelse return error.NoGstLowering;
+                var missing: []const u8 = "";
+                const text = registry_mod.renderTemplate(ctx.gpa, template, node.name, node.props, &missing) catch |e| switch (e) {
+                    error.MissingOption => {
+                        try ctx.out.warn("{s}: template for {s} needs option '{s}'", .{ node.name, node.type_name, missing });
+                        return error.MissingOption;
+                    },
+                    error.BadTemplate => return error.BadTemplate,
+                    error.OutOfMemory => return error.OutOfMemory,
+                };
+                for (m.handles) |h| {
+                    const hn = registry_mod.renderTemplate(ctx.gpa, h.name, node.name, node.props, &missing) catch return error.BadTemplate;
+                    try ctx.out.handle(hn, h.kind, node.type_name);
+                }
+                var out = ctx.upstream;
+                if (m.out_format != .unknown) out = Caps.ofFormat(m.out_format);
+                return .{ .text = text, .out = out };
+            },
+        }
     }
 
     // ── sources ──────────────────────────────────────────────────────────

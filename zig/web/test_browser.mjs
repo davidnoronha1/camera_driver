@@ -91,9 +91,80 @@ distortion_coefficients: {rows: 1, cols: 5, data: [-0.25, 0.0, 0.0, 0.0, 0.0]}
   return out;
 });
 console.log('undistort:', JSON.stringify(undistort));
+
+// Scenario 3: web plugin (manifest + JS impl) and a swapped-in runner.
+const plugin = await page.evaluate(async () => {
+  const { Core, Runtime, loadWebPlugin, registerRunner, listRunners } = await import('./host.js');
+  const core = await Core.load('./camera_driver.wasm');
+
+  await loadWebPlugin(core, {
+    manifest: {
+      plugin: 'tint',
+      elements: [{ type: 'RedTint', prefix: 'red_tint', role: 'transform', gst: { template: 'videobalance saturation=2' }, web: { impl: 'tint-red' } }],
+    },
+    impls: {
+      // An element implemented entirely by the plugin: paint a red wash over each frame.
+      'tint-red': async (stage, emit) => ({
+        async push(item) {
+          const { width: w, height: h } = item;
+          const c = new OffscreenCanvas(w, h);
+          const g = c.getContext('2d', { willReadFrequently: true });
+          g.drawImage(item, 0, 0);
+          g.fillStyle = 'rgba(255,0,0,1)';
+          g.fillRect(0, 0, w, h);
+          item.close?.();
+          await emit(c);
+        },
+      }),
+    },
+  });
+
+  const yaml = `elements:
+  - type: CustomSrcElement
+    format: RGB
+    width: 16
+    height: 16
+  - type: RedTint
+  - type: CustomPublisher
+`;
+  const plan = core.plan(yaml, { backend: 'web', caps: 'canvas' });
+  if (!plan.ok) return { error: JSON.stringify(plan) };
+
+  // (a) default runner executes the plugin's impl
+  const rt = await Runtime.start(plan, { core });
+  const got = new Promise((res) => (rt.handles.get('custom_pub_0').onFrame = res));
+  const src = new OffscreenCanvas(16, 16);
+  src.getContext('2d').fillRect(0, 0, 16, 16);
+  await rt.handles.get('custom_src_0').write(await createImageBitmap(src));
+  const frame = await got;
+  const px = frame.getContext('2d').getImageData(0, 0, 1, 1).data;
+  await rt.stop();
+
+  // (b) a different runner for the same plan: records instead of executing
+  const log = [];
+  registerRunner('recorder', {
+    build: async (p) => (log.push('build:' + p.chain.map((s) => s.impl).join('>')), { handles: new Map(), done: Promise.resolve(true) }),
+    handles: (s) => s.handles,
+    play: async () => log.push('play'),
+    wait: async (s) => s.done,
+    stop: async () => log.push('stop'),
+    destroy: async () => log.push('destroy'),
+  });
+  const rt2 = await Runtime.start(plan, { core, runner: 'recorder' });
+  await rt2.wait();
+  await rt2.stop();
+
+  let unknown = '';
+  try { await Runtime.start(plan, { core, runner: 'nope' }); } catch (e) { unknown = String(e.message); }
+  return { red: [px[0], px[1], px[2]], log, runners: listRunners(), unknown };
+});
+console.log('plugin:', JSON.stringify(plugin));
 await browser.close();
 server.close();
 
+if (plugin.error || plugin.red?.[0] !== 255 || plugin.red?.[1] !== 0) { console.error('FAIL: web plugin impl did not run', plugin); process.exit(1); }
+if (plugin.log.join(',') !== 'build:push-source>tint-red>callback-sink,play,stop,destroy') { console.error('FAIL: runner swap', plugin.log); process.exit(1); }
+if (!/no runner named 'nope'/.test(plugin.unknown)) { console.error('FAIL: unknown runner not reported'); process.exit(1); }
 if (errors.length) { console.error('page errors:', errors); process.exit(1); }
 if (result.nonzero < 1000 || result.sink < 5) { console.error('FAIL: no video reached the sinks'); process.exit(1); }
 for (const [impl, r] of Object.entries(undistort)) {

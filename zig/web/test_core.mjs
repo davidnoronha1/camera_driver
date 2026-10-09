@@ -54,4 +54,37 @@ core.undistortInit({ width: 8, height: 6, K: [10, 0, 4, 0, 10, 3, 0, 0, 1], D: [
 const moved = core.undistortFrame(img);
 assert.notDeepEqual(moved, img);
 
+// 7. web plugin backend: a manifest adds element types at runtime.
+const before = core.listElements().length;
+const pluginName = core.registerManifest({
+  plugin: 'demo',
+  elements: [
+    {
+      type: 'TimeOverlay', prefix: 'time_overlay', role: 'transform', required: ['font'],
+      gst: { template: 'timeoverlay name={name} font-desc="{font}" valignment={valign|top}' },
+      web: { impl: 'overlay-time' },
+    },
+    { type: 'GstOnlyThing', prefix: 'gst_only', role: 'sink', gst: { template: 'fakesink name={name}' }, web: { unsupported: 'nothing to render to' } },
+  ],
+});
+assert.equal(pluginName, 'demo');
+assert.equal(core.listElements().length, before + 2);
+assert.equal(core.listElements().find((e) => e.type === 'TimeOverlay').origin, 'demo');
+
+const cfgPlug = 'elements:\n  - type: CustomSrcElement\n    format: I420\n  - type: TimeOverlay\n    font: Sans 20\n';
+const g = core.plan(cfgPlug, { backend: 'gst' });
+assert.match(g.launch, /timeoverlay name=time_overlay_0 font-desc="Sans 20" valignment=top$/);
+const wp = core.plan(cfgPlug, { backend: 'web', caps: 'canvas' });
+assert.equal(wp.ok, true);
+assert.equal(wp.chain[1].impl, 'overlay-time');
+const wp2 = core.plan(cfgPlug + '  - type: GstOnlyThing\n', { backend: 'web', caps: 'canvas' });
+assert.equal(wp2.ok, false);
+assert.equal(wp2.unsupported[0].reason, 'nothing to render to');
+
+// rejected manifests say why, and don't half-register
+assert.throws(() => core.registerManifest({ elements: [{ type: 'MuxElement', prefix: 't', role: 'mux' }] }), /already registered/);
+assert.throws(() => core.registerManifest('not json'), /not valid JSON/);
+assert.throws(() => core.registerManifest({ elements: [{ type: 'Bad', prefix: 'b', role: 'nope' }] }), /role/);
+assert.equal(core.plan('elements:\n  - type: Bad\n').stage, 'graph'); // 'Bad' never registered
+
 console.log('wasm core OK (' + readFileSync(new URL('camera_driver.wasm', here)).length + ' bytes)');

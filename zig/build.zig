@@ -9,7 +9,17 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true, // dlopen for native plugins and the GStreamer runner
     });
+
+    // The C plugin header, translated, so a test can check the hand-written
+    // Zig mirrors in plugin_abi.zig against the real thing.
+    const header = b.addTranslateC(.{
+        .root_source_file = b.path("include/camera_driver_plugin.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    mod.addImport("plugin_header", header.createModule());
 
     // The repo's own example configs double as test fixtures, embedded from
     // their single source of truth rather than copied.
@@ -29,6 +39,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
+            .link_libc = true,
             .imports = &.{.{ .name = "camera_driver", .module = mod }},
         }),
     });
@@ -59,9 +70,39 @@ pub fn build(b: *std.Build) void {
     const install_wasm = b.addInstallFileWithDir(wasm.getEmittedBin(), .{ .custom = "../web" }, "camera_driver.wasm");
     b.step("wasm", "Build web/camera_driver.wasm").dependOn(&install_wasm.step);
 
+    // ── test fixtures: a toy native plugin and a stub GStreamer ──────────
+    const toy = addCLib(b, "cd_toy_plugin", "test/toy_plugin.c", target, optimize);
+    const stub = addCLib(b, "cd_stub_gst", "test/stub_gst.c", target, optimize);
+    const cpp = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true, .link_libcpp = true });
+    cpp.addIncludePath(b.path("include"));
+    cpp.addCSourceFile(.{ .file = b.path("examples/cpp_plugin.cpp"), .flags = &.{ "-std=c++17", "-fvisibility=hidden" } });
+    const cpp_plugin = b.addLibrary(.{ .name = "cd_example_cpp", .linkage = .dynamic, .root_module = cpp });
+    const install_cpp = b.addInstallArtifact(cpp_plugin, .{});
+    b.step("example-plugin", "Build the C++ example plugin (zig-out/lib/libcd_example_cpp.so)").dependOn(&install_cpp.step);
+    const install_toy = b.addInstallArtifact(toy, .{});
+    const install_stub = b.addInstallArtifact(stub, .{});
+
     // ── tests ────────────────────────────────────────────────────────────
     const tests = b.addTest(.{ .root_module = mod });
     const run_tests = b.addRunArtifact(tests);
+    run_tests.step.dependOn(&install_toy.step);
+    run_tests.step.dependOn(&install_cpp.step);
+    run_tests.step.dependOn(&install_stub.step);
+    // Tests load the fixtures installed under zig-out/lib, relative to the package.
+    run_tests.setCwd(b.path("."));
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
+}
+
+fn addCLib(
+    b: *std.Build,
+    name: []const u8,
+    source: []const u8,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) *std.Build.Step.Compile {
+    const m = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true });
+    m.addIncludePath(b.path("include"));
+    m.addCSourceFile(.{ .file = b.path(source), .flags = &.{ "-std=c11", "-fvisibility=hidden" } });
+    return b.addLibrary(.{ .name = name, .linkage = .dynamic, .root_module = m });
 }

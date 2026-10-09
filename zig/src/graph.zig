@@ -6,7 +6,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const props = @import("props.zig");
-const elements = @import("elements.zig");
+const registry_mod = @import("registry.zig");
 const Props = props.Props;
 const Value = props.Value;
 
@@ -42,6 +42,7 @@ const Counters = std.StringHashMapUnmanaged(u32);
 
 const Builder = struct {
     gpa: Allocator,
+    registry: *const registry_mod.Registry,
     counters: Counters = .empty,
     diag: ?*Diagnostic,
 
@@ -62,7 +63,7 @@ const Builder = struct {
         const m = v.asMap() orelse return self.fail("element entry is not a mapping", .{}, error.ElementMissingType);
         const type_name = props.getString(m, "type") orelse
             return self.fail("element is missing the 'type' field", .{}, error.ElementMissingType);
-        const spec = elements.find(type_name) orelse
+        const spec = self.registry.find(type_name) orelse
             return self.fail("unknown element type '{s}'", .{type_name}, error.UnknownElement);
 
         for (spec.required) |req| {
@@ -103,8 +104,8 @@ const Builder = struct {
 };
 
 /// Build a graph from a parsed document. Allocate from an arena.
-pub fn fromValue(gpa: Allocator, root: Value, diag: ?*Diagnostic) Error!Graph {
-    var b: Builder = .{ .gpa = gpa, .diag = diag };
+pub fn fromValue(gpa: Allocator, registry: *const registry_mod.Registry, root: Value, diag: ?*Diagnostic) Error!Graph {
+    var b: Builder = .{ .gpa = gpa, .registry = registry, .diag = diag };
     const root_map = root.asMap() orelse props.Props.empty;
 
     const list = props.getList(root_map, "elements") orelse
@@ -132,7 +133,9 @@ test "names follow construction order, mux first" {
         \\            - - type: MJPEGPublisher
         \\      - - type: NVUnixFDPublisher
     , null);
-    const g = try fromValue(a, doc, null);
+    var reg = try registry_mod.Registry.init(std.testing.allocator);
+    defer reg.deinit();
+    const g = try fromValue(a, &reg, doc, null);
     try std.testing.expectEqualStrings("custom_src_0", g.nodes[0].name);
     try std.testing.expectEqualStrings("tee_0", g.nodes[1].name);
     try std.testing.expectEqualStrings("opt_conv_0", g.nodes[1].branches[0][0].name);
@@ -147,12 +150,14 @@ test "errors name the problem" {
     defer arena.deinit();
     const a = arena.allocator();
     var d: Diagnostic = .{};
+    var reg = try registry_mod.Registry.init(std.testing.allocator);
+    defer reg.deinit();
 
     const unknown = try yaml.parseFirst(a, "elements:\n  - type: Nope\n", null);
-    try std.testing.expectError(error.UnknownElement, fromValue(a, unknown, &d));
+    try std.testing.expectError(error.UnknownElement, fromValue(a, &reg, unknown, &d));
     try std.testing.expectEqualStrings("unknown element type 'Nope'", d.message);
 
     const missing = try yaml.parseFirst(a, "elements:\n  - type: RTSPSourceElement\n", null);
-    try std.testing.expectError(error.MissingRequiredOption, fromValue(a, missing, &d));
+    try std.testing.expectError(error.MissingRequiredOption, fromValue(a, &reg, missing, &d));
     try std.testing.expectEqualStrings("RTSPSourceElement: 'url' is required", d.message);
 }

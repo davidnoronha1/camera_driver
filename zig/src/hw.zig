@@ -64,6 +64,27 @@ pub const HwCaps = struct {
         return c;
     }
 
+    /// Is the named GStreamer element known to exist? (Used by plugins.)
+    pub fn hasElement(self: HwCaps, name: []const u8) bool {
+        if (eql(name, "nvjpegenc")) return self.has_nvjpegenc;
+        if (eql(name, "nvh264enc")) return self.has_nvh264enc;
+        if (eql(name, "nvv4l2h264enc")) return self.has_nvv4l2h264enc;
+        if (eql(name, "nvvidconv")) return self.has_nvvidconv and eql(self.nvvidconv_name, "nvvidconv");
+        if (eql(name, "nvvideoconvert")) return self.has_nvvidconv and eql(self.nvvidconv_name, "nvvideoconvert");
+        if (eql(name, "nvunixfdsink")) return self.has_nvunixfdsink;
+        if (eql(name, "nvunixfdsrc")) return self.has_nvunixfdsrc;
+        if (eql(name, "qsvh264enc")) return self.has_qsvh264enc;
+        if (eql(name, "v4l2h264enc")) return self.has_v4l2h264enc;
+        if (eql(name, "jpegenc")) return self.has_jpegenc;
+        if (eql(name, "x264enc")) return self.has_x264enc;
+        if (eql(name, "nvv4l2decoder")) return self.has_nvv4l2h264dec;
+        if (eql(name, "nvh264dec")) return self.has_nvh264dec;
+        if (eql(name, "avdec_h264")) return self.has_avdec_h264;
+        if (eql(name, "nvdewarper")) return self.has_nvdewarper;
+        if (eql(name, "nveglglessink")) return self.has_nveglglessink;
+        return false;
+    }
+
     /// Parse a comma-separated element list, e.g. `"x264enc,jpegenc,nvh264enc"`.
     pub fn fromCsv(gpa: std.mem.Allocator, csv: []const u8) !HwCaps {
         var names: std.ArrayList([]const u8) = .empty;

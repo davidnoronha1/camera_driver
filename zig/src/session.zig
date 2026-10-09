@@ -12,6 +12,7 @@ const hw_mod = @import("hw.zig");
 const json = @import("json.zig");
 const plan_mod = @import("plan.zig");
 const props = @import("props.zig");
+const registry_mod = @import("registry.zig");
 const web = @import("web_factory.zig");
 const yaml = @import("yaml.zig");
 
@@ -26,6 +27,8 @@ pub const Files = struct {
 };
 
 pub const Request = struct {
+    /// Element catalogue: built-ins plus whatever plugins registered.
+    registry: *const registry_mod.Registry,
     source: []const u8,
     backend: Backend = .gst,
     /// Which `---` document to plan.
@@ -104,7 +107,7 @@ fn runInner(gpa: Allocator, req: Request) !Result {
         return failure(.request, try std.fmt.allocPrint(gpa, "document {d} requested but the file has {d}", .{ req.doc_index, docs.len }), 0);
 
     var gdiag: graph_mod.Diagnostic = .{};
-    const g = graph_mod.fromValue(gpa, docs[req.doc_index], &gdiag) catch |e| switch (e) {
+    const g = graph_mod.fromValue(gpa, req.registry, docs[req.doc_index], &gdiag) catch |e| switch (e) {
         error.OutOfMemory => return e,
         else => return failure(.graph, gdiag.message, 0),
     };
@@ -114,14 +117,14 @@ fn runInner(gpa: Allocator, req: Request) !Result {
 
     switch (req.backend) {
         .gst => {
-            var opts: gst.Options = .{ .hw = req.hw };
+            var opts: gst.Options = .{ .registry = req.registry, .hw = req.hw };
             if (req.device) |d| opts.default_device = .{ .path = d };
             var f = gst.GstPipelineFactory.init(gpa, opts);
             const out = f.build(g, &sp) catch |e| return failure(.lower, lowerMessage(e), 0);
             return .{ .gst = .{ .out = out, .pipeline = g.pipeline, .doc_count = docs.len } };
         },
         .web => {
-            var f = web.WebPipelineFactory.init(gpa, .{ .caps = req.web_caps });
+            var f = web.WebPipelineFactory.init(gpa, .{ .registry = req.registry, .caps = req.web_caps });
             const out = f.build(g, &sp) catch |e| return failure(.lower, lowerMessage(e), 0);
             return .{ .web = .{ .out = out, .doc_count = docs.len } };
         },
@@ -136,6 +139,10 @@ fn lowerMessage(e: anyerror) []const u8 {
         error.EmptyOutputs => "OptimizedConverter: 'outputs' is empty",
         error.UnsupportedTarget => "OptimizedConverter: unsupported target format",
         error.UnsupportedOnGst => "element type has no GStreamer implementation",
+        error.NoGstLowering => "plugin element has no GStreamer lowering",
+        error.MissingOption => "plugin element template needs an option that is not set (see warnings)",
+        error.BadTemplate => "plugin element has a malformed gst template",
+        error.PluginFailed => "a native plugin's lower() returned an error (see warnings)",
         error.OutOfMemory => "out of memory",
         else => @errorName(e),
     };
@@ -222,13 +229,15 @@ test "session: gst + web from the same text, json is parseable" {
         \\    height: 240
         \\  - type: DisplayPublisher
     ;
-    const g = run(a, .{ .source = src, .backend = .gst });
+    var reg = try registry_mod.Registry.init(std.testing.allocator);
+    defer reg.deinit();
+    const g = run(a, .{ .registry = &reg, .source = src, .backend = .gst });
     const gj = try toJson(a, g);
     const gp = try std.json.parseFromSlice(std.json.Value, a, gj, .{});
     try std.testing.expect(gp.value.object.get("ok").?.bool);
     try std.testing.expect(std.mem.indexOf(u8, gp.value.object.get("launch").?.string, "appsrc name=custom_src_0") != null);
 
-    const w = run(a, .{ .source = src, .backend = .web });
+    const w = run(a, .{ .registry = &reg, .source = src, .backend = .web });
     const wp = try std.json.parseFromSlice(std.json.Value, a, try toJson(a, w), .{});
     try std.testing.expect(wp.value.object.get("ok").?.bool);
 }
@@ -238,14 +247,17 @@ test "session: failures are structured" {
     defer arena.deinit();
     const a = arena.allocator();
 
-    const bad_yaml = run(a, .{ .source = "elements: [1,\n" });
+    var reg = try registry_mod.Registry.init(std.testing.allocator);
+    defer reg.deinit();
+    const bad_yaml = run(a, .{ .registry = &reg, .source = "elements: [1,\n" });
     try std.testing.expectEqual(@as(usize, 1), bad_yaml.failure.line);
     try std.testing.expect(bad_yaml.failure.stage == .yaml);
 
-    const unknown = run(a, .{ .source = "elements:\n  - type: Bogus\n" });
+    const unknown = run(a, .{ .registry = &reg, .source = "elements:\n  - type: Bogus\n" });
     try std.testing.expect(unknown.failure.stage == .graph);
 
     const noenc = run(a, .{
+        .registry = &reg,
         .source = "elements:\n  - type: CustomSrcElement\n  - type: OptimizedConverter\n    outputs: [H264]\n",
         .hw = .{},
     });
@@ -260,7 +272,10 @@ test "session: metadata seeds undistort" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
+    var reg = try registry_mod.Registry.init(std.testing.allocator);
+    defer reg.deinit();
     const r = run(a, .{
+        .registry = &reg,
         .source = "elements:\n  - type: CustomSrcElement\n    format: RGB\n  - type: UndistortElement\n",
         .backend = .web,
         .metadata =

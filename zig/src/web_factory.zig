@@ -22,6 +22,7 @@ const elements = @import("elements.zig");
 const graph_mod = @import("graph.zig");
 const json = @import("json.zig");
 const plan_mod = @import("plan.zig");
+const registry_mod = @import("registry.zig");
 const props = @import("props.zig");
 
 const Caps = caps_mod.Caps;
@@ -70,6 +71,7 @@ pub const WebCaps = struct {
 };
 
 pub const Options = struct {
+    registry: *const registry_mod.Registry,
     caps: WebCaps = WebCaps.all,
 };
 
@@ -187,7 +189,39 @@ pub const WebPipelineFactory = struct {
         if (eq(t, "ROS2Publisher")) return self.no(ctx, node, "no ROS2 in the browser; bridge via rosbridge/foxglove websocket");
         if (eq(t, "InferServerElement")) return self.no(ctx, node, "DeepStream inference is native-only; run it in the native pipeline");
         if (eq(t, "GstElement")) return self.no(ctx, node, "raw GStreamer elements have no browser equivalent");
-        return self.no(ctx, node, "no web implementation for this element type");
+        return self.lowerPlugin(ctx, node);
+    }
+
+    /// Elements added at runtime: both manifests and native plugins name the
+    /// browser `impl` that realises them (or say why there is none).
+    fn lowerPlugin(self: *WebPipelineFactory, ctx: *LowerCtx, node: *const Node) !Lowered {
+        const entry = self.opts.registry.find(node.type_name) orelse
+            return self.no(ctx, node, "no web implementation for this element type");
+
+        const Info = struct { impl: ?[]const u8, reason: ?[]const u8, out_format: PixelFormat };
+        const info: Info = switch (entry.kind) {
+            .builtin => .{ .impl = null, .reason = null, .out_format = .unknown },
+            .manifest => |m| .{ .impl = m.web_impl, .reason = m.web_reason, .out_format = m.out_format },
+            .native => |def| .{
+                .impl = if (def.web_impl) |p| std.mem.span(p) else null,
+                .reason = if (def.web_reason) |p| std.mem.span(p) else null,
+                .out_format = .unknown,
+            },
+        };
+        if (entry.backends & @import("plugin_abi.zig").backend_web == 0 or info.impl == null)
+            return self.no(ctx, node, info.reason orelse "no web implementation for this element type");
+
+        switch (entry.kind) {
+            .manifest => |m| for (m.handles) |h| {
+                var missing: []const u8 = "";
+                const hn = registry_mod.renderTemplate(ctx.gpa, h.name, node.name, node.props, &missing) catch continue;
+                try ctx.out.handle(hn, h.kind, node.type_name);
+            },
+            else => {},
+        }
+        var out = ctx.upstream;
+        if (info.out_format != .unknown) out = Caps.ofFormat(info.out_format);
+        return .{ .text = try implText(ctx, info.impl.?, null), .out = out };
     }
 
     fn no(self: *WebPipelineFactory, ctx: *LowerCtx, node: *const Node, reason: []const u8) !Lowered {

@@ -239,8 +239,10 @@ several DeepStream base-image codec packages need `--reinstall`.
 `zig/` contains a second implementation of the pipeline core in Zig, structured
 so that one YAML config can be *lowered* either to a GStreamer launch string
 (`GstPipelineFactory`) or to a plan that runs in the browser on WebCodecs /
-canvas / WebGPU (`WebPipelineFactory`, compiled to a ~130 KB wasm module with no
-Emscripten). The existing C++ code is unchanged. See [`zig/README.md`](zig/README.md)
+canvas / WebGPU (`WebPipelineFactory`, compiled to a wasm module with no Emscripten). Elements and
+the pipeline *runner* are plugins on both platforms (native `.so` files over a C ABI,
+or web manifests + JS), so existing C++ elements can be wrapped instead of rewritten.
+The existing C++ code is unchanged. See [`zig/README.md`](zig/README.md)
 for the design, the element-by-element support matrix, and the known gaps.
 
 ## Adding a new pipeline element

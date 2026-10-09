@@ -18,9 +18,16 @@ const cfg_debug_display = @embedFile("cfg_debug_display");
 const queue = "queue leaky=downstream max-size-buffers=2";
 const sink_opts = "max-buffers=2 drop=true sync=false emit-signals=false";
 
-fn launchFor(arena: std.mem.Allocator, doc: props.Value, opts: gst.Options) !gst.Output {
-    const g = try graph_mod.fromValue(arena, doc, null);
-    var f = gst.GstPipelineFactory.init(arena, opts);
+const registry_mod = @import("registry.zig");
+
+/// Options minus the registry, which each helper supplies.
+const GstOpts = struct { hw: hw_mod.HwCaps = hw_mod.HwCaps.software };
+
+fn launchFor(arena: std.mem.Allocator, doc: props.Value, o: GstOpts) !gst.Output {
+    var reg = try registry_mod.Registry.init(std.testing.allocator);
+    defer reg.deinit();
+    const g = try graph_mod.fromValue(arena, &reg, doc, null);
+    var f = gst.GstPipelineFactory.init(arena, .{ .registry = &reg, .hw = o.hw });
     var sp: plan_mod.Scratchpad = .empty;
     return f.build(g, &sp);
 }
@@ -159,11 +166,13 @@ test "undistort: nvdewarper path writes a side file, cpu path exposes a handle" 
         \\    data: [-0.1, 0.01, 0.001, 0.002, 0.0]
     , null);
 
-    const g = try graph_mod.fromValue(a, doc, null);
+    var reg = try registry_mod.Registry.init(std.testing.allocator);
+    defer reg.deinit();
+    const g = try graph_mod.fromValue(a, &reg, doc, null);
 
     // GPU path
     {
-        var f = gst.GstPipelineFactory.init(a, .{ .hw = .{ .has_nvdewarper = true, .has_nvvidconv = true, .nvvidconv_name = "nvvidconv" } });
+        var f = gst.GstPipelineFactory.init(a, .{ .registry = &reg, .hw = .{ .has_nvdewarper = true, .has_nvvidconv = true, .nvvidconv_name = "nvvidconv" } });
         var sp: plan_mod.Scratchpad = .empty;
         try sp.put(a, calib.metadata_key, cal_doc);
         const out = try f.build(g, &sp);
@@ -181,7 +190,7 @@ test "undistort: nvdewarper path writes a side file, cpu path exposes a handle" 
     }
     // CPU path
     {
-        var f = gst.GstPipelineFactory.init(a, .{});
+        var f = gst.GstPipelineFactory.init(a, .{ .registry = &reg });
         var sp: plan_mod.Scratchpad = .empty;
         try sp.put(a, calib.metadata_key, cal_doc);
         const out = try f.build(g, &sp);
@@ -194,7 +203,7 @@ test "undistort: nvdewarper path writes a side file, cpu path exposes a handle" 
     }
     // No calibration: passthrough
     {
-        var f = gst.GstPipelineFactory.init(a, .{});
+        var f = gst.GstPipelineFactory.init(a, .{ .registry = &reg });
         var sp: plan_mod.Scratchpad = .empty;
         const out = try f.build(g, &sp);
         try std.testing.expect(std.mem.indexOf(u8, out.launch, "undistort") == null);
@@ -234,8 +243,10 @@ test "debug_display.yaml lowers without error" {
 const web = @import("web_factory.zig");
 
 fn webFor(arena: std.mem.Allocator, doc: props.Value, caps: web.WebCaps, sp: *plan_mod.Scratchpad) !web.Output {
-    const g = try graph_mod.fromValue(arena, doc, null);
-    var f = web.WebPipelineFactory.init(arena, .{ .caps = caps });
+    var reg = try registry_mod.Registry.init(std.testing.allocator);
+    defer reg.deinit();
+    const g = try graph_mod.fromValue(arena, &reg, doc, null);
+    var f = web.WebPipelineFactory.init(arena, .{ .registry = &reg, .caps = caps });
     return f.build(g, sp);
 }
 
@@ -366,4 +377,3 @@ test "http mjpeg source: the same element lowers on both backends" {
     const w = try webFor(a, doc, web.WebCaps.all, &sp);
     try std.testing.expect(w.ok);
 }
-// end

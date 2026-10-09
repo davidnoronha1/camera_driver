@@ -186,7 +186,9 @@ test "resolve threads caps and supplies lookahead (toy factory)" {
         \\  - type: OptimizedConverter
         \\  - type: MJPEGPublisher
     , null);
-    const g = try graph_mod.fromValue(a, doc, null);
+    var reg = try @import("registry.zig").Registry.init(std.testing.allocator);
+    defer reg.deinit();
+    const g = try graph_mod.fromValue(a, &reg, doc, null);
     var toy: Toy = .{};
     var sp: Scratchpad = .empty;
     const plan = try resolve(Toy, &toy, a, g, &sp);
