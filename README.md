@@ -234,6 +234,15 @@ without rebuilding), forwards X11 for `DisplayPublisher`, and requests the NVIDI
 runtime. See `docker/Dockerfile` and `docker-compose.yml` for details, including why
 several DeepStream base-image codec packages need `--reinstall`.
 
+## Zig core and web runtime (experimental)
+
+`zig/` contains a second implementation of the pipeline core in Zig, structured
+so that one YAML config can be *lowered* either to a GStreamer launch string
+(`GstPipelineFactory`) or to a plan that runs in the browser on WebCodecs /
+canvas / WebGPU (`WebPipelineFactory`, compiled to a ~130 KB wasm module with no
+Emscripten). The existing C++ code is unchanged. See [`zig/README.md`](zig/README.md)
+for the design, the element-by-element support matrix, and the known gaps.
+
 ## Adding a new pipeline element
 
 Implement `PipelineElement` (or `UnresolvedSegment` if it needs caps/hardware

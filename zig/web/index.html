@@ -1,0 +1,84 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>camera_driver (web)</title>
+<style>
+  :root { color-scheme: light dark; font: 14px/1.4 system-ui, sans-serif; }
+  body { margin: 0; padding: 16px; display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); max-width: 1100px; margin-inline: auto; }
+  @media (min-width: 900px) { body { grid-template-columns: 1fr 1fr; } }
+  h1 { grid-column: 1 / -1; font-size: 18px; margin: 0; }
+  textarea, pre { width: 100%; box-sizing: border-box; font: 12px/1.4 ui-monospace, monospace; }
+  textarea { height: 280px; }
+  pre { margin: 0; padding: 8px; overflow: auto; max-height: 280px; border: 1px solid #8884; border-radius: 6px; white-space: pre-wrap; word-break: break-all; }
+  canvas { width: 100%; background: #0003; border-radius: 6px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .bad { color: #c33; }
+  section { min-width: 0; display: grid; gap: 8px; align-content: start; }
+</style>
+<h1>camera_driver · web runtime</h1>
+
+<section>
+  <div class="row">
+    <label>Backend <select id="backend"><option value="web">web (runs here)</option><option value="gst">gst (preview string)</option></select></label>
+    <button id="plan">Plan</button>
+    <button id="run">Run</button>
+    <button id="stop" disabled>Stop</button>
+    <span id="stats"></span>
+  </div>
+  <textarea id="yaml" spellcheck="false">elements:
+  - type: V4L2SrcElement      # becomes getUserMedia in the browser
+    width: 640
+    height: 480
+    fps: 30
+  - type: MuxElement
+    branches:
+      - - type: DisplayPublisher
+      - - type: OptimizedConverter
+          outputs: [MJPEG]
+          quality: 70
+        - type: CustomPublisher
+</textarea>
+  <div>Detected capabilities: <code id="caps"></code></div>
+</section>
+
+<section>
+  <canvas id="view" width="640" height="480"></canvas>
+  <pre id="out"></pre>
+</section>
+
+<script type="module">
+  import { Core, Runtime, detectWebCaps } from './host.js';
+  const $ = (id) => document.getElementById(id);
+  const core = await Core.load('./camera_driver.wasm');
+  const caps = await detectWebCaps();
+  $('caps').textContent = caps || '(none)';
+
+  function plan() {
+    const backend = $('backend').value;
+    const p = core.plan($('yaml').value, { backend, caps: backend === 'web' ? caps : '' });
+    $('out').classList.toggle('bad', !p.ok);
+    $('out').textContent = !p.ok && p.error ? `${p.stage}${p.line ? ' (line ' + p.line + ')' : ''}: ${p.error}`
+      : backend === 'gst' ? p.launch
+      : JSON.stringify(p.unsupported.length ? { unsupported: p.unsupported } : p.chain.map((s) => s.impl), null, 1);
+    return p;
+  }
+  $('plan').onclick = plan;
+
+  let rt;
+  $('run').onclick = async () => {
+    $('backend').value = 'web';
+    const p = plan();
+    if (!p.ok) return;
+    try {
+      rt = await Runtime.start(p, { core, canvas: $('view'), onStats: (s) => ($('stats').textContent = `${s.fps.toFixed(1)} fps · ${s.width}×${s.height}`) });
+      let n = 0;
+      for (const h of rt.handles.values()) if (h.kind === 'frame_sink') h.onFrame = () => { window.__sinkFrames = ++n; };
+      $('run').disabled = true; $('stop').disabled = false;
+    } catch (e) {
+      $('out').classList.add('bad');
+      $('out').textContent = String(e.message ?? e);
+    }
+  };
+  $('stop').onclick = async () => { await rt?.stop(); $('run').disabled = false; $('stop').disabled = true; };
+  window.__ready = true;
+</script>

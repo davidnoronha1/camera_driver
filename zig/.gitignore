@@ -1,0 +1,4 @@
+.zig-cache/
+zig-out/
+# built by `zig build wasm`
+web/camera_driver.wasm
