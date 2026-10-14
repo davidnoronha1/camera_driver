@@ -222,13 +222,16 @@ if(CAMERA_DRIVER_WITH_ROS2)
     add_library(camera_driver_ros2 STATIC src/publishers/ros2_publisher.cpp)
     target_compile_definitions(camera_driver_ros2 PUBLIC CAMERA_DRIVER_WITH_ROS2)
     target_link_libraries(camera_driver_ros2 PUBLIC camera_driver_core)
-    ament_target_dependencies(camera_driver_ros2
+    ament_target_dependencies(camera_driver_ros2 PUBLIC
         rclcpp sensor_msgs image_transport camera_info_manager)
 
     add_executable(camera_driver_ros2_node src/ros2_node.cpp)
     target_compile_definitions(camera_driver_ros2_node PRIVATE CAMERA_DRIVER_WITH_ROS2)
-    target_link_libraries(camera_driver_ros2_node PRIVATE camera_driver_ros2)
-    ament_target_dependencies(camera_driver_ros2_node
+    # Retain static YAML element factories, as for the standalone executable.
+    target_link_libraries(camera_driver_ros2_node PRIVATE camera_driver_ros2
+        -Wl,--whole-archive camera_driver_core -Wl,--no-whole-archive)
+    set_target_properties(camera_driver_ros2_node PROPERTIES INSTALL_RPATH_USE_LINK_PATH TRUE)
+    ament_target_dependencies(camera_driver_ros2_node PUBLIC
         rclcpp sensor_msgs image_transport camera_info_manager)
 
     install(TARGETS camera_driver_ros2_node camera_driver_exe

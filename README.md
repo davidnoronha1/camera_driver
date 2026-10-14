@@ -136,3 +136,24 @@ changes — it looks the type up in `ElementRegistry` by name.
 ## TODO
 
 - CustomPublisher: callback-based variant
+
+### ROS YAML pipeline
+
+Build with `-DCAMERA_DRIVER_WITH_ROS2=ON`, then run:
+
+```bash
+ros2 launch camera_driver pipeline.launch.py pipeline_config:=/absolute/path/to/pipeline.yaml
+# Synthetic camera smoke test (no camera hardware):
+ros2 run camera_driver camera_driver_ros2_node --ros-args -p pipeline_config:=$(ros2 pkg prefix --share camera_driver)/config/ros2_test.yaml
+ros2 topic hz /camera/image
+```
+
+`ROS2Publisher` YAML elements accept `topic` (required), `frame_id` (default
+`camera`), and `camera_info_url` (optional calibration URL). Images are published
+at `<topic>/image`; calibrated camera information at `<topic>/camera_info`.
+The ROS node spins alongside the GStreamer event loop and stops the pipeline on
+ROS shutdown or end of stream. The standalone executable cannot create ROS publishers.
+
+After building, validate configuration errors, actual image delivery and clean
+shutdown with `python3 test/ros2_smoke.py /path/to/camera_driver_ros2_node` from a
+sourced ROS environment.

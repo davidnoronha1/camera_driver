@@ -115,10 +115,10 @@ GstFlowReturn ROS2Publisher::onNewSample(GstAppSink* sink, gpointer data) {
 
 } // namespace camera_driver
 
-REGISTER_PIPELINE_ELEMENT(ROS2Publisher, [](const YAML::Node& cfg) {
+REGISTER_PIPELINE_ELEMENT(ROS2Publisher, [](const YAML::Node&) {
     // ROS2Publisher requires a node — this factory can only be used when a node
-    // is injected externally. For YAML use, the node must be set after creation.
-    // Minimal stub for registry registration purposes:
+    // is injected externally. camera_driver_ros2_node replaces this factory
+    // with one capturing its ROS node before loading the YAML pipeline.
     throw std::runtime_error(
         "ROS2Publisher cannot be created from YAML without providing an rclcpp::Node. "
         "Create it programmatically and add it to MuxElement::addBranch().");

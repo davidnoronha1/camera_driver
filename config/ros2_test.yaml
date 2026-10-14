@@ -1,0 +1,13 @@
+# Synthetic camera: no physical device required.
+pipeline:
+  type: Pipeline
+elements:
+  - type: GstElement
+    element: videotestsrc
+    properties: is-live=true
+  - type: GstElement
+    element: capsfilter
+    properties: caps=video/x-raw,format=RGB,width=320,height=240,framerate=10/1
+  - type: ROS2Publisher
+    topic: camera
+    frame_id: camera_optical_frame
