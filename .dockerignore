@@ -1,3 +1,7 @@
+# Context for docker/Dockerfile*: COPY . . then a colcon build in the image.
+.git
+.vscode/
+**/__pycache__/
 build/
 install/
 log/
